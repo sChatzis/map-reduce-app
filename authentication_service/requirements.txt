@@ -1,0 +1,13 @@
+SQLAlchemy
+python-dotenv
+jose
+fastapi
+uvicorn[standard]
+sqlalchemy
+psycopg2-binary
+python-jose[cryptography]
+passlib[bcrypt]
+pydantic
+python-dotenv
+email-validator
+bcrypt==4.0.1

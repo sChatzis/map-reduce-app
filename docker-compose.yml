@@ -1,0 +1,39 @@
+services:
+  user_db:
+    image: postgres:15
+    container_name: user_db
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${USER_DB_USER}
+      POSTGRES_PASSWORD: ${USER_DB_PASSWORD}
+      POSTGRES_DB: ${USER_DB_NAME}
+    volumes:
+      - user_postgres_data:/var/lib/postgresql/data
+
+  auth_service:
+    build: ./authentication_service
+    container_name: auth_service
+    ports:
+      - "8000:8000"
+    depends_on:
+      - user_db
+    environment:
+      POSTGRES_USER: ${USER_DB_USER}
+      POSTGRES_PASSWORD: ${USER_DB_PASSWORD}
+      POSTGRES_DB: ${USER_DB_NAME}
+      POSTGRES_SERVER: user_db
+      POSTGRES_PORT: 5432
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+
+  ui_service:
+    build: ./ui_service # Adjust this to match your actual folder name
+    container_name: ui_service
+    depends_on:
+      - auth_service
+    environment:
+      # Use the Docker internal DNS name to reach the backend
+      BASE_URL: http://auth_service:8000/v1/users
+
+volumes:
+  user_postgres_data:

@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -35,4 +36,43 @@ spec:
   ports:
     - protocol: TCP
       port: 80
+=======
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ui-service
+  labels:
+    app: ui-service
+spec:
+  replicas: 3  # This handles the "high load" by running 3 copies
+  selector:
+    matchLabels:
+      app: ui-service
+  template:
+    metadata:
+      labels:
+        app: ui-service
+    spec:
+      containers:
+      - name: python-ui
+        image: mapreduce-cli:latest # Replace with your actual image name
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8000
+        env:
+        - name: BASE_URL
+          value: "http://manager-service:8000"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ui-service-lb
+spec:
+  type: LoadBalancer # Exposes the service to external clients
+  selector:
+    app: ui-service
+  ports:
+    - protocol: TCP
+      port: 80
+>>>>>>> ada3ecb (Authentication Service implemented and API integration with UI)
       targetPort: 8000
