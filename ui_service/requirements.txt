@@ -1,0 +1,3 @@
+typer[all]
+typing_extensions
+requests
