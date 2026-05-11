@@ -75,7 +75,42 @@ def worker_find_worker_by_id(worker_id: int):
     worker = None
 
     try:
-        cursor.execute(cmd.JOB_FIND_JOB_BY_ID, (id,))
+        cursor.execute(cmd.WORKER_FIND_WORKER_BY_ID, (id,))
+        worker = cursor.fetchall()
+
+        if len(worker) != 1:
+            print(f"[worker.py] worker_find_worker: more than one workers with the same id")
+            worker = None
+    except Exception as ex:
+        print(f"[worker.py] worker_find_worker: failed to fetch worker [{ex}]")
+        worker = None
+
+    if worker is not None:
+        try:
+            worker = Worker.model_validate(worker[0])
+        except Exception as ex:
+            print(f"[worker.py] worker_find_worker: could not validate model [{ex}]")
+            worker = None
+
+    db.dds_db.close()
+
+    return worker
+
+def worker_update_status():
+    if not db.dds_db.connected:
+        print(f"[worker.py] worker_find_worker: no connection to dds")
+        return None
+
+    cursor = db.dds_db.cursor()
+
+    if cursor is None:
+        print(f"[worker.py] worker_find_worker: could not get cursor from worker database")
+        return None
+
+    worker = None
+
+    try:
+        cursor.execute(cmd.WORKER_FIND_WORKER_BY_ID, (id,))
         worker = cursor.fetchall()
 
         if len(worker) != 1:
@@ -111,7 +146,7 @@ def worker_get_workers():
     _workers = None
 
     try:
-        cursor.execute(cmd.JOB_GET_JOBS)
+        cursor.execute(cmd.WORKER_GET_WORKERS)
         _workers = cursor.fetchall()
     except Exception as ex:
         print(f"[worker.py] worker_get_workers: failed to fetch workers [{ex}]")

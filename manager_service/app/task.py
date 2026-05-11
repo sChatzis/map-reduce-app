@@ -34,7 +34,7 @@ class Task(BaseModel):
     job_id: int
     worker_id: int
 
-def task_add_task(job_id: int, worker_id: int, type: TaskType, input_split: str):
+def task_add_task(job_id: int, worker_id: int, type: TaskType, input_split: str, data_location: str):
     if not db.dds_db.connected:
         print(f"[task.py] task_add_task: no connection to dds")
         return None
@@ -46,7 +46,7 @@ def task_add_task(job_id: int, worker_id: int, type: TaskType, input_split: str)
         return None
 
     try:
-        cursor.execute(cmd., (,))
+        cursor.execute(cmd.TASK_ADD_TASK, (job_id, worker_id, type, input_split, data_location))
     except Exception as ex:
         print(f"[task.py] task_add_task: failed to execute query [{ex}]")
         return None
@@ -80,7 +80,7 @@ def task_find_task_by_id(task_id: int):
     task = None
 
     try:
-        cursor.execute(cmd., (,))
+        cursor.execute(cmd.TASK_FIND_TASK_BY_ID, (task_id,))
         task = cursor.fetchall()
 
         if len(task) != 1:
@@ -116,7 +116,7 @@ def task_get_tasks():
     _tasks = None
 
     try:
-        cursor.execute(cmd.)
+        cursor.execute(cmd.TASK_GET_TASKS)
         _tasks = cursor.fetchall()
     except Exception as ex:
         print(f"[task.py] task_get_tasks: failed to fetch tasks [{ex}]")
