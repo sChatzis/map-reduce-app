@@ -1,51 +1,40 @@
 from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-import uvicorn
+from app.db.database import engine, Base
+from app.api.v1.endpoints import jobs
 
-import database as db
-import manager
 
 @asynccontextmanager
-async def manager_lifespan(app: FastAPI):
-    if not db.dds_db.connect():
-        print(f"[main.py] manager_lifespan: dds connection failed", flush=True)
-    else:
-        print(f"[main.py] manager_lifespan: dds connection succeeded", flush=True)
-
+async def lifespan(app: FastAPI):
+    print("[main.py] lifespan: creating database tables")
+    # Import all models so SQLAlchemy knows about them before create_all
+    from app.models import job, task, worker  # noqa: F401
+    Base.metadata.create_all(bind=engine)
+    print("[main.py] lifespan: tables ready")
     yield
+    print("[main.py] lifespan: shutdown")
 
-    if not db.dds_db.disconnect():
-        print(f"[main.py] manager_lifespan: dds disconnect failed", flush=True)
-    else:
-        print(f"[main.py] manager_lifespan: dds disconnect succeeded", flush=True)
 
-app = FastAPI(title="Manager API", lifespan=manager_lifespan)
+app = FastAPI(title="Manager API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:8001"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-app.include_router(manager.manager_router)
+app.include_router(jobs.router, prefix="/v1")
+
 
 @app.exception_handler(404)
-async def default_error(req: Request, exc: HTTPException):
-    print(f"[main.py] default_error: Invalid URI [{req.url.path}]")
+async def not_found_handler(req: Request, exc: HTTPException):
     return JSONResponse(
         status_code=404,
-        content={"detail": f"[main.py] default_error: Invalid URI [{req.url.path}]"}
-    )
-
-if __name__ == "__main__":
-    uvicorn.run(
-        "main:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True
+        content={"detail": f"Invalid URI [{req.url.path}]"}
     )
