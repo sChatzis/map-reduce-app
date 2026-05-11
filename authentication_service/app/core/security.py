@@ -143,8 +143,7 @@ def get_admin_user_payload(payload: dict = Depends(get_current_user)) -> dict:
 
     role = payload.get("role")
 
-    # Check if the role is 'admin'
-    if role != "admin":
+    if role != UserRole.ADMIN:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Operation requires administrator privileges."
