@@ -1,0 +1,12 @@
+pydantic
+fastapi
+SQLAlchemy
+requests
+passlib
+python-jose
+psycopg2-binary
+typer
+typing_extensions
+uvicorn
+minio
+kubernetes
