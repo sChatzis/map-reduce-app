@@ -10,9 +10,7 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 FROM python:3.11-slim
 WORKDIR /app
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY ./app /app/app
 
-# Copy the CLI script
-COPY ./cli.py /app/cli.py
-
-# Keep the container running in the background so we can exec into it
-CMD ["tail", "-f", "/dev/null"]
+EXPOSE 8001
+CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001"]

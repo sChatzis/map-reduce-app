@@ -55,26 +55,6 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None) -> s
     return encoded_jwt
 
 
-"""Decodes and validates a JWT."""
-
-
-def decode_access_token(token: str) -> dict:
-    try:
-        payload = jwt.decode(
-            token,
-            settings.JWT_SECRET_KEY,
-            algorithms=[settings.ALGORITHM]
-        )
-        return payload
-    except JWTError:
-        # Raise exception if the token is invalid or expired
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Could not validate credentials",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-
 """
     Decodes the JWT and returns the payload data (user_id, role, status).
     Raises HTTPException if the token is invalid, expired, or malformed.
@@ -144,7 +124,7 @@ def get_admin_user_payload(payload: dict = Depends(get_current_user)) -> dict:
     role = payload.get("role")
 
     # Check if the role is 'admin'
-    if role != "admin":
+    if role != UserRole.ADMIN:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Operation requires administrator privileges."

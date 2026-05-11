@@ -1,11 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from sqlalchemy import or_
 
 from app.db.database import get_db
 from app.models.user import DBUser
 from app.schemas.user import UserCreate, TokenRequest, Token, UserOut, UserUpdate
-from app.core.security import get_password_hash, verify_password, create_access_token, get_active_user, get_admin_user_payload, get_current_user
+from app.core.security import get_password_hash, verify_password, create_access_token, get_active_user, get_admin_user_payload
 from app.models.enums import UserStatus, UserRole
 
 router = APIRouter()
@@ -18,12 +17,10 @@ def register_user(user_in: UserCreate, db: Session = Depends(get_db)):
         Registers a new user.
         Account status is set to PENDING_APPROVAL, requiring Admin activation.
     """
-    if db.query(DBUser).filter(
-            or_(DBUser.username == user_in.username)
-    ).first():
+    if db.query(DBUser).filter(DBUser.username == user_in.username).first():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Username or email already exists"
+            detail="Username already exists"
         )
 
     # Hash the password
@@ -45,29 +42,27 @@ def register_user(user_in: UserCreate, db: Session = Depends(get_db)):
     return new_user
 
 
-# --- Get all users ---
-@router.get("/", response_model=list[UserOut], dependencies=[Depends(get_current_user)])
+# --- Get current user info ---
+@router.get("/me", response_model=UserOut, status_code=status.HTTP_200_OK)
+def get_me(current_user: DBUser = Depends(get_active_user)):
+    """Retrieve the current user's information. Requires a valid, active JWT token."""
+    return current_user
+
+
+# --- Get all users (Admin only) ---
+@router.get("/", response_model=list[UserOut], dependencies=[Depends(get_admin_user_payload)])
 def read_all_users(db: Session = Depends(get_db)):
     users = db.query(DBUser).all()
     return users
 
 
 # --- Get specific user by ID (Admin only) ---
-@router.get("/{user_id}", response_model=UserOut)
-def read_user(
-        user_id: int,
-        db: Session = Depends(get_db),
-        current_user: dict = Depends(get_current_user)
-):
+@router.get("/{user_id}", response_model=UserOut, dependencies=[Depends(get_admin_user_payload)])
+def read_user(user_id: int, db: Session = Depends(get_db)):
     user = db.query(DBUser).filter(DBUser.id == user_id).first()
 
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-
-    # Security check: Admin can do this
-    user_role = current_user.get("role")
-    if user_role != "admin":
-        raise HTTPException(status_code=403, detail="Not authorized to view users")
 
     return user
 
@@ -130,15 +125,6 @@ def login(form_data: TokenRequest, db: Session = Depends(get_db)):
     )
 
     return {"access_token": access_token, "token_type": "bearer"}
-
-
-@router.get("/me", response_model=UserOut, status_code=status.HTTP_200_OK)
-def get_me(current_user: DBUser = Depends(get_active_user)):
-    """
-        Retrieve the current user's information. Requires a valid, active JWT token.
-    """
-    # The user is authenticated and active
-    return current_user
 
 
 # --- Delete User ---
