@@ -16,6 +16,23 @@ services:
       timeout: 5s
       retries: 10
 
+  dds:
+    image: postgres:15
+    container_name: dds
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: ${DDS_USER}
+      POSTGRES_PASSWORD: ${DDS_PASSWORD}
+      POSTGRES_DB: ${DDS_NAME}
+    volumes:
+      - dds_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DDS_USER} -d ${DDS_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   auth_service:
     build: ./authentication_service
     container_name: auth_service
@@ -75,6 +92,37 @@ services:
       BASE_URL: http://auth_service:8000/v1/users
       MANAGER_URL: http://manager_service:8001
 
+  adminer:
+    image: adminer
+    restart: always
+    ports:
+      - "8081:8080"
+
+  manager_service:
+    build: ./manager_service
+    container_name: manager_service
+    ports:
+      - "8001:8000"
+    depends_on:
+      dds:
+        condition: service_healthy
+    environment:
+      POSTGRES_DDS_USER: ${DDS_USER}
+      POSTGRES_DDS_PASSWORD: ${DDS_PASSWORD}
+      POSTGRES_DDS_DB: ${DDS_NAME}
+      POSTGRES_DDS_SERVER: dds
+      POSTGRES_DDS_PORT: 5432
+
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT}
+      MINIO_BUCKET: ${MINIO_BUCKET}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+
+      MANAGER_NAMESPACE: default
+      MANAGER_WORKER_IMAGE_NAME: manager_worker:latest
+
 volumes:
   user_postgres_data:
-  jobs_postgres_data:
+  dds_postgres_data:

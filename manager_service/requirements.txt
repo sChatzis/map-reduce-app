@@ -1,4 +1,11 @@
 fastapi
+uvicorn
+SQLAlchemy
+psycopg2-binary
+pydantic
+python-dotenv
+minio
+kubernetes
 uvicorn[standard]
 sqlalchemy
 psycopg2-binary
