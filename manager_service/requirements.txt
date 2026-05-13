@@ -6,3 +6,9 @@ pydantic
 python-dotenv
 minio
 kubernetes
+uvicorn[standard]
+sqlalchemy
+psycopg2-binary
+python-jose[cryptography]
+pydantic
+python-dotenv
