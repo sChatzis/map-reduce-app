@@ -1,8 +1,3 @@
-<<<<<<< HEAD
 typer[all]
 typing_extensions
-=======
-typer[all]
-typing_extensions
->>>>>>> ada3ecb (Authentication Service implemented and API integration with UI)
 requests

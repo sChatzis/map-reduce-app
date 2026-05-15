@@ -1,0 +1,21 @@
+# Environment variables (contains secrets - never commit)
+.env
+.env.*
+!example.env
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Build artifacts
+*.zip

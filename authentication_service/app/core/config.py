@@ -22,7 +22,7 @@ class Settings:
     )
 
     # JWT Settings
-    JWT_SECRET_KEY: str = os.getenv("JWT_SECRET_KEY", "your-insecure-default-secret-key")
+    JWT_SECRET_KEY: str = os.environ["JWT_SECRET_KEY"]
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24 hours
 
