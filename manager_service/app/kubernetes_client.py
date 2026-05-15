@@ -16,6 +16,16 @@ def _get_batch_client():
         _batch_v1 = k8s_client.BatchV1Api()
     return _batch_v1
 
+
+def get_batch_client() -> k8s_client.BatchV1Api:
+    """Return the (lazily initialized) BatchV1Api singleton.
+
+    Designed for use as a FastAPI dependency so tests can override it with a
+    fake client via ``app.dependency_overrides[get_batch_client] = lambda: fake``
+    without touching a real Kubernetes cluster.
+    """
+    return _get_batch_client()
+
 def create_worker_job(
         worker_id: int,
         pod_name: str,
