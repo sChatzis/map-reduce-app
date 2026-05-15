@@ -78,7 +78,7 @@ services:
     build: ./manager_service
     container_name: manager_service
     ports:
-      - "8001:8001"
+      - "8001:8000"
     depends_on:
       jobs_db:
         condition: service_healthy

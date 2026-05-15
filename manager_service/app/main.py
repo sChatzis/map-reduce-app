@@ -5,6 +5,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.db.database import engine, Base
+from app.models.job import Job
+from app.models.task import Task
+from app.models.worker import Worker
 from app.api.v1.endpoints import jobs
 from app.services.kubernetes_service import monitor_workers
 
