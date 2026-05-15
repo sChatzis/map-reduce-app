@@ -1,10 +1,10 @@
 from kubernetes import client as k8s_client
 from kubernetes import config as kubernetes_config
 
-from app.core.config import settings
+from app.core.settings import settings
+from app.models.enums import TaskType
 
 _batch_v1 = None
-
 
 def _get_batch_client():
     global _batch_v1
@@ -16,8 +16,15 @@ def _get_batch_client():
         _batch_v1 = k8s_client.BatchV1Api()
     return _batch_v1
 
-
-def create_worker_job(worker_id: int, pod_name: str, script_fpath: str, in_fpath: str, out_fpath: str, retries: int = 3):
+def create_worker_job(
+        worker_id: int,
+        pod_name: str,
+        script_fpath: str,
+        in_fpath: str,
+        out_fpath: str,
+        task_type: TaskType,
+        retries: int = 3
+):
     batch_v1 = _get_batch_client()
 
     minio_env = [
@@ -43,7 +50,7 @@ def create_worker_job(worker_id: int, pod_name: str, script_fpath: str, in_fpath
                     restart_policy="OnFailure",
                     containers=[
                         k8s_client.V1Container(
-                            name=f"worker-{worker_id}-runner",
+                            name=f"worker-{worker_id}-{task_type}",
                             image=settings.MANAGER_WORKER_IMAGE_NAME,
                             env=minio_env + [script_var, in_var, out_var]
                         )

@@ -3,18 +3,37 @@ from sqlalchemy.orm import Session
 
 from app.db.database import get_db
 from app.schemas.job import JobCreate, JobOut
-from app.models.enums import JobStatus
+from app.models.enums import JobStatus, TaskType
 from app.services import job_service
+from app.services import task_service
+from app.utils import utility
 
 router = APIRouter()
-
 
 @router.post("/jobs", response_model=JobOut, status_code=201)
 def add_job(req: JobCreate, db: Session = Depends(get_db)):
     print("[jobs.py] add_job")
     job = job_service.job_add(req, db)
+
     if job is None:
         raise HTTPException(status_code=500, detail="Job insert failed")
+
+    input_split = utility.split_input_file_to_chunks(job.input_files, 4)
+    output_split = utility.generate_map_output_paths(job.input_files, 4)
+
+    tasks = task_service.task_add_batch(job.job_id, TaskType.MAP, input_split, output_split, db)
+
+    if tasks is None:
+        raise HTTPException(status_code=500, detail="Map tasks insert failed")
+
+    input_split = utility.generate_reduce_input_paths(job.input_files, 2)
+    output_split = utility.generate_reduce_output_paths(job.input_files, 2)
+
+    tasks = task_service.task_add_batch(job.job_id, TaskType.REDUCE, input_split, output_split, db)
+
+    if tasks is None:
+        raise HTTPException(status_code=500, detail="Reduce tasks insert failed")
+
     return job
 
 

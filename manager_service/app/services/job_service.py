@@ -7,7 +7,6 @@ from app.models.enums import JobStatus
 from app.schemas.job import JobCreate
 from app.utils.utility import is_valid_path
 
-
 def job_add(req: JobCreate, db: Session) -> Optional[Job]:
     if req.user_id <= 0:
         print(f"[job_service] job_add: user_id not valid [{req.user_id}]")
@@ -31,19 +30,18 @@ def job_add(req: JobCreate, db: Session) -> Optional[Job]:
         reducer_code=req.reducer_code,
         user_id=req.user_id,
     )
+
     db.add(job)
     db.commit()
     db.refresh(job)
-    return job
 
+    return job
 
 def job_get(job_id: int, db: Session) -> Optional[Job]:
     return db.query(Job).filter(Job.job_id == job_id).first()
 
-
 def job_get_all(db: Session) -> list[Job]:
     return db.query(Job).all()
-
 
 def job_update_status(job_id: int, new_status: JobStatus, db: Session) -> Optional[Job]:
     job = db.query(Job).filter(Job.job_id == job_id).first()

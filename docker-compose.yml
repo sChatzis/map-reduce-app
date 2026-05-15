@@ -16,23 +16,6 @@ services:
       timeout: 5s
       retries: 10
 
-  dds:
-    image: postgres:15
-    container_name: dds
-    ports:
-      - "5433:5432"
-    environment:
-      POSTGRES_USER: ${DDS_USER}
-      POSTGRES_PASSWORD: ${DDS_PASSWORD}
-      POSTGRES_DB: ${DDS_NAME}
-    volumes:
-      - dds_postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DDS_USER} -d ${DDS_NAME}"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
   auth_service:
     build: ./authentication_service
     container_name: auth_service
@@ -49,34 +32,64 @@ services:
       POSTGRES_PORT: 5432
       JWT_SECRET_KEY: ${JWT_SECRET_KEY}
 
-  ui_service:
-    build: ./ui_service
-    container_name: ui_service
-    depends_on:
-      - auth_service
+  jobs_db:
+    image: postgres:15
+    container_name: jobs_db
+    ports:
+      - "5433:5432"
     environment:
-      BASE_URL: http://auth_service:8000/v1/users
+      POSTGRES_USER: ${JOBS_DB_USER}
+      POSTGRES_PASSWORD: ${JOBS_DB_PASSWORD}
+      POSTGRES_DB: ${JOBS_DB_NAME}
+    volumes:
+      - jobs_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${JOBS_DB_USER} -d ${JOBS_DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   adminer:
     image: adminer
+    container_name: adminer
     restart: always
     ports:
       - "8081:8080"
+
+  minio:
+    image: minio/minio
+    container_name: minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY}
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   manager_service:
     build: ./manager_service
     container_name: manager_service
     ports:
-      - "8001:8000"
+      - "8001:8001"
     depends_on:
-      dds:
+      jobs_db:
+        condition: service_healthy
+      minio:
         condition: service_healthy
     environment:
-      POSTGRES_DDS_USER: ${DDS_USER}
-      POSTGRES_DDS_PASSWORD: ${DDS_PASSWORD}
-      POSTGRES_DDS_DB: ${DDS_NAME}
-      POSTGRES_DDS_SERVER: dds
-      POSTGRES_DDS_PORT: 5432
+      POSTGRES_USER: ${JOBS_DB_USER}
+      POSTGRES_PASSWORD: ${JOBS_DB_PASSWORD}
+      POSTGRES_DB: ${JOBS_DB_NAME}
+      POSTGRES_SERVER: jobs_db
+      POSTGRES_PORT: 5432
 
       JWT_SECRET_KEY: ${JWT_SECRET_KEY}
 
@@ -85,9 +98,19 @@ services:
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
 
-      MANAGER_NAMESPACE: default
-      MANAGER_WORKER_IMAGE_NAME: manager_worker:latest
+      MANAGER_NAMESPACE: "mapreduce"
+
+  ui_service:
+    build: ./ui_service
+    container_name: ui_service
+    depends_on:
+      - auth_service
+      - manager_service
+    environment:
+      BASE_URL: http://auth_service:8000/v1/users
+      MANAGER_URL: http://manager_service:8001
 
 volumes:
   user_postgres_data:
-  dds_postgres_data:
+  jobs_postgres_data:
+  minio_data:

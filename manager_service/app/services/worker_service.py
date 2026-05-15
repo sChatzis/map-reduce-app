@@ -6,7 +6,6 @@ from sqlalchemy.orm import Session
 from app.models.worker import Worker
 from app.models.enums import WorkerStatus
 
-
 def worker_add(pod_name: str, db: Session) -> Optional[Worker]:
     if not pod_name:
         print(f"[worker_service] worker_add: pod_name is empty")
@@ -19,6 +18,7 @@ def worker_add(pod_name: str, db: Session) -> Optional[Worker]:
     db.add(worker)
     db.commit()
     db.refresh(worker)
+
     return worker
 
 

@@ -1,8 +1,9 @@
 fastapi
-uvicorn
-SQLAlchemy
+uvicorn[standard]
+sqlalchemy
 psycopg2-binary
+python-jose[cryptography]
 pydantic
 python-dotenv
-minio
 kubernetes
+minio
