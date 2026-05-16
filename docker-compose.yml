@@ -78,16 +78,16 @@ services:
     build: ./manager_service
     container_name: manager_service
     ports:
-      - "8001:8000"
+      - "8001:8001"
     depends_on:
       jobs_db:
         condition: service_healthy
       minio:
         condition: service_healthy
     environment:
-      POSTGRES_USER: ${JOBS_DB_USER}
-      POSTGRES_PASSWORD: ${JOBS_DB_PASSWORD}
-      POSTGRES_DB: ${JOBS_DB_NAME}
+      JOBS_DB_USER: ${JOBS_DB_USER}
+      JOBS_DB_PASSWORD: ${JOBS_DB_PASSWORD}
+      JOBS_DB_NAME: ${JOBS_DB_NAME}
       POSTGRES_SERVER: jobs_db
       POSTGRES_PORT: 5432
 
@@ -99,6 +99,7 @@ services:
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
 
       MANAGER_NAMESPACE: "mapreduce"
+      MANAGER_MAPPER_INPUT_SIZE: 512
 
   ui_service:
     build: ./ui_service

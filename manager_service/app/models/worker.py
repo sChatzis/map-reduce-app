@@ -12,6 +12,6 @@ class Worker(Base):
     worker_id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     pod_name = Column(String, nullable=False, unique=True)
     status = Column(Enum(WorkerStatus), default=WorkerStatus.IDLE, nullable=False)
-    last_heartbeat = Column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
+    last_heartbeat = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False)
 
     tasks = relationship("Task", back_populates="worker")

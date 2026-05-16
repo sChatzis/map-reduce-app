@@ -1,43 +1,66 @@
 from typing import Optional
 from datetime import datetime, UTC
 
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from app.models.worker import Worker
 from app.models.enums import WorkerStatus
+from app.utils.utility import is_valid_uuid
 
-def worker_add(pod_name: str, db: Session) -> Optional[Worker]:
+import logging
+
+logger = logging.getLogger(__name__)
+
+async def worker_add(pod_name: str, db: AsyncSession) -> Optional[Worker]:
     if not pod_name:
-        print(f"[worker_service] worker_add: pod_name is empty")
         return None
 
     worker = Worker(
         pod_name=pod_name,
         status=WorkerStatus.IDLE,
     )
+
     db.add(worker)
-    db.commit()
-    db.refresh(worker)
+
+    await db.commit()
+    await db.refresh(worker)
 
     return worker
 
 
-def worker_get(worker_id: int, db: Session) -> Optional[Worker]:
-    return db.query(Worker).filter(Worker.worker_id == worker_id).first()
-
-
-def worker_get_all(db: Session) -> list[Worker]:
-    return db.query(Worker).all()
-
-
-def worker_update_status(worker_id: int, new_status: WorkerStatus, db: Session) -> Optional[Worker]:
-    worker = db.query(Worker).filter(Worker.worker_id == worker_id).first()
-    if worker is None:
-        print(f"[worker_service] worker_update_status: worker {worker_id} not found")
+async def worker_get(worker_id: str, db: AsyncSession) -> Optional[Worker]:
+    if not is_valid_uuid(worker_id):
         return None
 
-    worker.status = new_status
-    worker.last_heartbeat = datetime.now(UTC)
-    db.commit()
-    db.refresh(worker)
+    result = await db.execute(select(Worker).where(Worker.worker_id == worker_id))
+    return result.scalar_one_or_none()
+
+
+async def worker_get_all(db: AsyncSession) -> list[Worker]:
+    result = await db.execute(select(Worker))
+    return list(result.scalars().all())
+
+
+async def worker_update_status(worker_id: str, new_status: WorkerStatus, db: AsyncSession) -> Optional[Worker]:
+    if not is_valid_uuid(worker_id):
+        return None
+
+    async with db.begin_nested():
+        result = await db.execute(
+            select(Worker)
+            .where(Worker.worker_id == str(worker_id))
+            .with_for_update()
+        )
+        worker = result.scalar_one_or_none()
+
+        if worker is None:
+            return None
+
+        worker.status = new_status
+        worker.last_heartbeat = datetime.now(UTC)
+
+    await db.commit()
+    await db.refresh(worker)
+
     return worker

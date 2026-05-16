@@ -4,6 +4,12 @@ from kubernetes import config as kubernetes_config
 from app.core.settings import settings
 from app.models.enums import TaskType
 
+import asyncio
+import os
+import logging
+
+logger = logging.getLogger(__name__)
+
 _batch_v1 = None
 
 def _get_batch_client():
@@ -26,7 +32,7 @@ def get_batch_client() -> k8s_client.BatchV1Api:
     """
     return _get_batch_client()
 
-def create_worker_job(
+async def create_worker_job(
         worker_id: int,
         pod_name: str,
         script_fpath: str,
@@ -70,4 +76,8 @@ def create_worker_job(
         )
     )
 
-    return batch_v1.create_namespaced_job(namespace=settings.MANAGER_NAMESPACE, body=job)
+    return await asyncio.to_thread(
+        batch_v1.create_namespaced_job,
+        namespace=settings.MANAGER_NAMESPACE,
+        body=job
+    )

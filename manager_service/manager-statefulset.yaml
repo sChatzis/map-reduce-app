@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: manager-service
+  namespace: mapreduce
+  labels:
+    app: manager-service
+spec:
+  serviceName: manager-service
+  replicas: 2
+
+  selector:
+    matchLabels:
+      app: manager-service
+
+  template:
+    metadata:
+      labels:
+        app: manager-service
+
+    spec:
+      serviceAccountName: manager-sa
+
+      containers:
+        - name: manager-service
+          image: map-reduce-app-manager_service:latest
+          imagePullPolicy: Never
+
+          ports:
+            - containerPort: 8001
+
+          envFrom:
+            - secretRef:
+                name: manager-env
+
+          env:
+            - name: MANAGER_NAMESPACE
+              value: "mapreduce"
+            - name: POSTGRES_SERVER
+              value: "host.docker.internal"
+            - name: POSTGRES_PORT
+              value: "5433"
+            - name: MINIO_ENDPOINT
+              value: "host.docker.internal:9000"
+            - name: MANAGER_MAPPER_INPUT_SIZE
+              value: "512"
+
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 5
+            periodSeconds: 10
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 15
+            periodSeconds: 20

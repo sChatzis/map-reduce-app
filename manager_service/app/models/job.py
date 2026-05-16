@@ -18,8 +18,8 @@ class Job(Base):
     reducer_code = Column(String, nullable=False)     # MinIO path to reducer .py
     num_mappers = Column(String, nullable=False, default="1")
     num_reducers = Column(String, nullable=False, default="1")
-    created_at = Column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
-    updated_at = Column(DateTime, default=lambda: datetime.now(UTC),
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC),
                         onupdate=lambda: datetime.now(UTC), nullable=False)
 
     tasks = relationship("Task", back_populates="job", cascade="all, delete-orphan")

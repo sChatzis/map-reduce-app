@@ -1,5 +1,3 @@
-import asyncio
-import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -11,8 +9,11 @@ from app.models.job import Job
 from app.models.task import Task
 from app.models.worker import Worker
 from app.api.v1.endpoints import jobs
-from app.services.kubernetes_service import monitor_workers
+from app.services.kubernetes_service import safe_monitor_workers
 from app.services.minio_service import ensure_bucket
+
+import asyncio
+import logging
 
 # Uvicorn's default LOGGING_CONFIG only attaches handlers to the ``uvicorn.*``
 # loggers, leaving the root at WARNING; this makes ``app.*`` INFO logs visible.
@@ -21,19 +22,29 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 
-# Create all tables on startup
-Base.metadata.create_all(bind=engine)
+logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Create tables
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
     ensure_bucket(settings.MINIO_BUCKET)
-    monitor_task = asyncio.create_task(monitor_workers())
+
+    monitor_task = asyncio.create_task(safe_monitor_workers())
+
     yield
+
     monitor_task.cancel()
+
     try:
         await monitor_task
     except asyncio.CancelledError:
-        print("[main.py] monitor stopped")
+        logger.info("[main.py] monitor stopped")
+        pass
+
+    await engine.dispose()
 
 
 app = FastAPI(title="Manager Service API", version="1.0.0", lifespan=lifespan)
