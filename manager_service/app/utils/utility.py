@@ -1,5 +1,3 @@
-from pathlib import PurePosixPath
-
 import os
 import io
 import re
@@ -7,10 +5,33 @@ import re
 from app.core.settings import settings
 from app.services.minio_service import client as minio_client
 
+
+_KEY_CHARS = re.compile(r"^[A-Za-z0-9/_\-\.]+$")
+
+
 def is_valid_path(path: str) -> bool:
-    if (not PurePosixPath(path).is_absolute()) or ("\0" in path):
+    """Validate a MinIO object key.
+
+    Rules:
+        - non-empty
+        - no NUL byte
+        - no leading ``/`` — MinIO / ``boto3`` / ``minio-py`` treat leading
+          slashes inconsistently (some normalize, some keep them as literal
+          first byte), so we reject them up front
+        - no ``..`` segments (prevents traversal-style keys)
+        - no empty segments (rejects ``a//b`` and trailing slashes)
+        - characters limited to ``[A-Za-z0-9/_\\-.]``
+
+    The previous POSIX absolute-path requirement has been dropped — MinIO
+    keys are not filesystem paths.
+    """
+    if not path or "\0" in path:
         return False
-    return bool(re.match(r'^[a-zA-Z0-9/_\-\.]+$', path))
+    if path.startswith("/"):
+        return False
+    if any(seg in ("", "..") for seg in path.split("/")):
+        return False
+    return bool(_KEY_CHARS.match(path))
 
 def generate_map_output_paths(input_path: str, num_chunks: int) -> list[str]:
     base, ext = os.path.splitext(input_path)
