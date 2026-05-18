@@ -7,9 +7,9 @@ load_dotenv()
 class Settings:
     POSTGRES_USER: str = os.getenv("JOBS_DB_USER", "manager_user")
     POSTGRES_PASSWORD: str = os.getenv("JOBS_DB_PASSWORD", "secret")
-    POSTGRES_SERVER: str = os.getenv("JOBS_DB_NAME", "localhost")
+    POSTGRES_SERVER: str = os.getenv("POSTGRES_SERVER", "localhost")
     POSTGRES_PORT: str = os.getenv("POSTGRES_PORT", "5432")
-    POSTGRES_DB: str = os.getenv("POSTGRES_DB", "jobs_db")
+    POSTGRES_DB: str = os.getenv("JOBS_DB_NAME", "jobs_db")
     DATABASE_URL: str = (
         f"postgresql+asyncpg://{POSTGRES_USER}:{quote_plus(POSTGRES_PASSWORD)}"
         f"@{POSTGRES_SERVER}:{POSTGRES_PORT}/{POSTGRES_DB}"
