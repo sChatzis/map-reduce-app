@@ -11,6 +11,8 @@ class JobCreate(BaseModel):
     mapper_code: str
     reducer_code: str
     user_id: int
+    num_mappers: int = 4
+    num_reducers: int = 2
 
 class JobOut(BaseModel):
     job_id: uuid.UUID

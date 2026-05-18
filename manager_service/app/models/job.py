@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, UTC
-from sqlalchemy import Column, String, Enum, DateTime
+from sqlalchemy import Column, String, Integer, Enum, DateTime
 from sqlalchemy.orm import relationship
 from app.db.database import Base
 from app.models.enums import JobStatus
@@ -16,8 +16,8 @@ class Job(Base):
     output_path = Column(String, nullable=True)       # MinIO path to output (set on completion)
     mapper_code = Column(String, nullable=False)      # MinIO path to mapper .py
     reducer_code = Column(String, nullable=False)     # MinIO path to reducer .py
-    num_mappers = Column(String, nullable=False, default="1")
-    num_reducers = Column(String, nullable=False, default="1")
+    num_mappers = Column(Integer, nullable=False, default=4)
+    num_reducers = Column(Integer, nullable=False, default=2)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False)
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC),
                         onupdate=lambda: datetime.now(UTC), nullable=False)

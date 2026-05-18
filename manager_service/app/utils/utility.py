@@ -89,82 +89,67 @@ def generate_reduce_output_paths(orig_path: str, job_id: int, num_reducers: int)
     ]
 
 
-def calculate_num_chunks(
-    input_object: str,
-    chunk_size: int = settings.MANAGER_MAPPER_INPUT_SIZE,
-    bucket: str = settings.MINIO_BUCKET
-) -> int:
-    if chunk_size <= 0:
-        return 0
-
-    stat = minio_client.stat_object(bucket, input_object)
-    total_size = stat.size
-
-    if total_size == 0:
-        return 0
-
-    return math.ceil(total_size / chunk_size)
-
-def calculate_num_partitions(num_chunks: int) -> int:
-    if num_chunks <= 0:
-        return 0
-
-    if (num_chunks % 2) == 0:
-        return num_chunks // 2
-
-    return (num_chunks // 2) + 1
-
 def split_input_file_to_chunks(
     input_object: str,
     job_id: str,
-    chunk_size: int = settings.MANAGER_MAPPER_INPUT_SIZE,
-    bucket: str = settings.MINIO_BUCKET
+    num_chunks: int,
+    bucket: str = settings.MINIO_BUCKET,
 ) -> list[str]:
-    if chunk_size <= 0:
+    """Split a text input into up to ``num_chunks`` line-aligned chunks in MinIO.
+
+    Splits at line boundaries (not bytes) so per-record formats like word
+    count cannot be bisected mid-record — OSDI'04 §4.4 requires input splits
+    that respect record boundaries.
+
+    If the input has fewer non-empty lines than ``num_chunks``, returns one
+    chunk per line (so the returned list can be shorter than ``num_chunks``).
+    Callers must use ``len(returned)`` rather than ``num_chunks`` for any
+    downstream sizing (see ``add_job`` in the jobs endpoint).
+    """
+    if num_chunks <= 0:
         return []
 
     resp = minio_client.get_object(bucket, input_object)
-    data = resp.read()
+    lines = resp.read().decode("utf-8").splitlines()
     resp.close()
 
-    if not data:
+    lines = [line for line in lines if line.strip()]
+    if not lines:
         return []
 
-    base, ext = os.path.splitext(input_object)
+    _, ext = os.path.splitext(input_object)
 
-    chunk_paths = []
-    idx = 0
-
-    if len(data) <= chunk_size:
-        minio_client.put_object(
-            bucket,
-            f"{job_id}/chunks/{job_id}_chunk{ext}",
-            data=io.BytesIO(data),
-            length=len(data),
-            content_type="text/plain"
-        )
-        logger.debug(
-            f"[utility.py] uploaded chunk of {len(data)} bytes → {job_id}/chunks/{job_id}_chunk{ext}"
-        )
-
-        return [f"{job_id}/chunks/{job_id}_chunk{ext}"]
-
-    for start in range(0, len(data), chunk_size):
-        chunk_data = data[start : start + chunk_size]
-        chunk_path = f"{job_id}/chunks/{job_id}_chunk_{idx}{ext}"
-
+    if num_chunks == 1:
+        chunk_path = f"{job_id}/chunks/{job_id}_chunk{ext}"
+        chunk_data = ("\n".join(lines) + "\n").encode("utf-8")
         minio_client.put_object(
             bucket,
             chunk_path,
             data=io.BytesIO(chunk_data),
             length=len(chunk_data),
-            content_type="text/plain"
+            content_type="text/plain",
+        )
+        logger.debug(f"[utility.py] uploaded single chunk → {chunk_path}")
+        return [chunk_path]
+
+    chunk_size = math.ceil(len(lines) / num_chunks)
+    chunks = [lines[i : i + chunk_size] for i in range(0, len(lines), chunk_size)]
+
+    chunk_paths: list[str] = []
+    for idx, chunk in enumerate(chunks):
+        chunk_data = ("\n".join(chunk) + "\n").encode("utf-8")
+        chunk_path = f"{job_id}/chunks/{job_id}_chunk_{idx}{ext}"
+        minio_client.put_object(
+            bucket,
+            chunk_path,
+            data=io.BytesIO(chunk_data),
+            length=len(chunk_data),
+            content_type="text/plain",
         )
         chunk_paths.append(chunk_path)
         logger.debug(
-            f"[utility.py] uploaded chunk {idx} of {len(chunk_data)} bytes → {job_id}/chunks/{job_id}_chunk_{idx}{ext}"
+            f"[utility.py] uploaded chunk {idx} of {len(chunk)} lines → {chunk_path}"
         )
-        idx += 1
 
     return chunk_paths
 

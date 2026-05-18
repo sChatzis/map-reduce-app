@@ -47,6 +47,8 @@ async def job_add(req: JobCreate, db: AsyncSession) -> Optional[Job]:
         mapper_code=req.mapper_code,
         reducer_code=req.reducer_code,
         user_id=str(req.user_id),
+        num_mappers=req.num_mappers,
+        num_reducers=req.num_reducers,
     )
 
     db.add(job)
@@ -87,68 +89,6 @@ async def job_get_all(db: AsyncSession) -> list[Job]:
 async def job_get_submitted(db: AsyncSession) -> list[Job]:
     result = await db.execute(select(Job).where(Job.status == JobStatus.SUBMITTED))
     return list(result.scalars().all())
-
-
-async def job_update_num_mappers(
-    job_id: str,
-    num_mappers: int,
-    db: AsyncSession
-) -> Optional[Job]:
-
-    if not is_valid_uuid(job_id):
-        return None
-
-    if num_mappers < 1:
-        return None
-
-    result = await db.execute(
-        select(Job)
-        .where(Job.job_id == job_id)
-        .with_for_update()
-    )
-
-    job = result.scalar_one_or_none()
-
-    if job is None:
-        return None
-
-    job.num_mappers = str(num_mappers)
-
-    await db.commit()
-    await db.refresh(job)
-
-    return job
-
-
-async def job_update_num_reducers(
-    job_id: str,
-    num_reducers: int,
-    db: AsyncSession
-) -> Optional[Job]:
-
-    if not is_valid_uuid(job_id):
-        return None
-
-    if num_reducers < 1:
-        return None
-
-    result = await db.execute(
-        select(Job)
-        .where(Job.job_id == job_id)
-        .with_for_update()
-    )
-
-    job = result.scalar_one_or_none()
-
-    if job is None:
-        return None
-
-    job.num_reducers = str(num_reducers)
-
-    await db.commit()
-    await db.refresh(job)
-
-    return job
 
 
 async def job_update_status(job_id: str, new_status: JobStatus, db: AsyncSession) -> Optional[Job]:

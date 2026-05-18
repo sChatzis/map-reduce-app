@@ -19,44 +19,38 @@ logger = logging.getLogger(__name__)
 async def add_job(req: JobCreate, db: AsyncSession = Depends(get_db)):
     logger.info("[jobs.py] add_job")
 
+    if req.num_mappers < 1:
+        raise HTTPException(status_code=400, detail="num_mappers must be >= 1")
+    if req.num_reducers < 1:
+        raise HTTPException(status_code=400, detail="num_reducers must be >= 1")
+
     job = await job_service.job_add(req, db)
 
     if job is None:
         raise HTTPException(status_code=500, detail="Job insert failed")
 
-    num_chunks = utility.calculate_num_chunks(job.input_files)
-    num_partitions = utility.calculate_num_partitions(num_chunks)
-
-    if num_chunks < 1 or num_partitions < 1:
-        raise HTTPException(status_code=400, detail="Invalid chunk/partition count")
-
-    await job_service.job_update_num_mappers(job.job_id, num_chunks, db)
-    await job_service.job_update_num_reducers(job.job_id, num_partitions, db)
-
-    map_inputs = utility.split_input_file_to_chunks(job.input_files, job.job_id)
+    # NOTE: step 7 of the orchestration plan will move chunking + MAP-task
+    # spawn into the K8s Job spawn flow. Until then, derive ``actual_mappers``
+    # from the split result, not the request: ``split_input_file_to_chunks``
+    # returns fewer chunks than requested when the input has fewer non-empty
+    # lines than ``num_mappers``. Using the request value would produce a
+    # paths/inputs length mismatch in ``task_add_batch``.
+    map_inputs = utility.split_input_file_to_chunks(
+        job.input_files, job.job_id, job.num_mappers
+    )
+    actual_mappers = len(map_inputs)
     map_outputs = utility.generate_map_output_paths(
-        job.input_files,
-        job.job_id,
-        num_chunks
+        job.input_files, job.job_id, actual_mappers
     )
 
     map_tasks = await task_service.task_add_batch(
-        job.job_id,
-        TaskType.MAP,
-        map_inputs,
-        map_outputs,
-        db
+        job.job_id, TaskType.MAP, map_inputs, map_outputs, db
     )
 
     if not map_tasks:
         raise HTTPException(status_code=500, detail="Map tasks insert failed")
 
-    updated_job = await job_service.job_get(job.job_id, db)
-
-    if not updated_job:
-        raise HTTPException(status_code=500, detail="Job retrieval failed")
-
-    return updated_job
+    return job
 
 
 @router.get("/jobs", response_model=list[JobOut])
