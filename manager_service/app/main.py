@@ -9,8 +9,8 @@ from app.models.job import Job
 from app.models.task import Task
 from app.models.worker import Worker
 from app.api.v1.endpoints import jobs
-from app.services.kubernetes_service import safe_monitor_workers
-from app.services.minio_service import ensure_bucket
+from app.services.kubernetes_service import safe_monitor
+from app.services.minio_service import ensure_bucket, upload_local_file
 
 import asyncio
 import logging
@@ -26,25 +26,34 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Create tables
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
     ensure_bucket(settings.MINIO_BUCKET)
 
-    monitor_task = asyncio.create_task(safe_monitor_workers())
+    upload_local_file(f"app/utils/map.py", "map.py")
+    upload_local_file(f"app/utils/reduce.py", "reduce.py")
+    upload_local_file(f"test_input.txt", "test_input.txt")
 
-    yield
+    monitor_task = asyncio.create_task(safe_monitor())
 
-    monitor_task.cancel()
+    def handle_task_exception(t: asyncio.Task):
+        try:
+            t.result()
+        except Exception as ex:
+            logger.exception(f"[main.py] monitor_task crashed {ex}")
+
+    monitor_task.add_done_callback(handle_task_exception)
 
     try:
-        await monitor_task
-    except asyncio.CancelledError:
-        logger.info("[main.py] monitor stopped")
-        pass
-
-    await engine.dispose()
+        yield
+    finally:
+        monitor_task.cancel()
+        try:
+            await monitor_task
+        except asyncio.CancelledError:
+            logger.info("[main.py] monitor stopped")
+        await engine.dispose()
 
 
 app = FastAPI(title="Manager Service API", version="1.0.0", lifespan=lifespan)

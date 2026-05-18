@@ -6,6 +6,7 @@ import logging
 import uuid
 
 from app.core.settings import settings
+from app.services.minio_service import delete_files
 from app.services.minio_service import client as minio_client
 
 _KEY_CHARS = re.compile(r"^[A-Za-z0-9/_\-\.]+$")
@@ -48,13 +49,12 @@ def generate_map_output_paths(input_path: str, job_id: int, num_chunks: int) -> 
         return []
 
     base, ext = os.path.splitext(input_path)
-    file_name = os.path.basename(base)
 
     if num_chunks == 1:
-        return [input_path]
+        return [f"{job_id}/map/{job_id}_map{ext}"]
 
     return [
-        f"{base}_{job_id}_map/{file_name}_{job_id}_map_{idx}{ext}"
+        f"{job_id}/map/{job_id}_map_{idx}{ext}"
         for idx in range(num_chunks)
     ]
 
@@ -64,13 +64,12 @@ def generate_reduce_input_paths(orig_path: str, job_id: int, num_reducers: int) 
         return []
 
     base, ext = os.path.splitext(orig_path)
-    file_name = os.path.basename(base)
 
     if num_reducers == 1:
-        return [f"{base}_{job_id}_part/{file_name}_{job_id}_part{ext}"]
+        return [f"{job_id}/part/{job_id}_part{ext}"]
 
     return [
-        f"{base}_{job_id}_part/{file_name}_{job_id}_part_{idx}{ext}"
+        f"{job_id}/part/{job_id}_part_{idx}{ext}"
         for idx in range(num_reducers)
     ]
 
@@ -80,13 +79,12 @@ def generate_reduce_output_paths(orig_path: str, job_id: int, num_reducers: int)
         return []
 
     base, ext = os.path.splitext(orig_path)
-    file_name = os.path.basename(base)
 
     if num_reducers == 1:
-        return [f"{base}_{job_id}_reduce/{file_name}_{job_id}_reduce{ext}"]
+        return [f"{job_id}/reduce/{job_id}_reduce{ext}"]
 
     return [
-        f"{base}_{job_id}_reduce/{file_name}_{job_id}_reduce_{idx}{ext}"
+        f"{job_id}/reduce/{job_id}_reduce_{idx}{ext}"
         for idx in range(num_reducers)
     ]
 
@@ -133,14 +131,27 @@ def split_input_file_to_chunks(
         return []
 
     base, ext = os.path.splitext(input_object)
-    file_name = os.path.basename(base)
 
     chunk_paths = []
     idx = 0
 
+    if len(data) <= chunk_size:
+        minio_client.put_object(
+            bucket,
+            f"{job_id}/chunks/{job_id}_chunk{ext}",
+            data=io.BytesIO(data),
+            length=len(data),
+            content_type="text/plain"
+        )
+        logger.debug(
+            f"[utility.py] uploaded chunk of {len(data)} bytes → {job_id}/chunks/{job_id}_chunk{ext}"
+        )
+
+        return [f"{job_id}/chunks/{job_id}_chunk{ext}"]
+
     for start in range(0, len(data), chunk_size):
         chunk_data = data[start : start + chunk_size]
-        chunk_path = f"{base}_{job_id}_chunks/{file_name}_{job_id}_chunk_{idx}{ext}"
+        chunk_path = f"{job_id}/chunks/{job_id}_chunk_{idx}{ext}"
 
         minio_client.put_object(
             bucket,
@@ -151,7 +162,7 @@ def split_input_file_to_chunks(
         )
         chunk_paths.append(chunk_path)
         logger.debug(
-            f"[utility.py] uploaded chunk {idx} of {len(chunk_data)} bytes → {base}_{job_id}_chunks"
+            f"[utility.py] uploaded chunk {idx} of {len(chunk_data)} bytes → {job_id}/chunks/{job_id}_chunk_{idx}{ext}"
         )
         idx += 1
 
@@ -160,7 +171,7 @@ def split_input_file_to_chunks(
 
 def merge_and_partition_map(
     input_object: str,
-    job_id: int,
+    job_id: str,
     map_paths: list[str],
     num_reducers: int,
     bucket: str = settings.MINIO_BUCKET
@@ -185,18 +196,17 @@ def merge_and_partition_map(
                 parts[reducer_idx].append((key, value))
 
         except Exception as ex:
-            logger.warning(f"[utility.py] reduce_merge_and_partition_map: failed to read {path}: {ex}")
+            logger.warning(f"[utility.py] merge_and_partition_map: failed to read {path}: {ex}")
 
     for part in parts:
         part.sort(key=lambda x: x[0])
 
     base, ext = os.path.splitext(input_object)
-    file_name = os.path.basename(base)
 
     if num_reducers == 1:
         all_pairs = parts[0]
         part_data = ("\n".join(f"{k}\t{v}" for k, v in all_pairs) + "\n").encode("utf-8")
-        part_path = f"{base}_{job_id}_part/{file_name}_{job_id}_part{ext}"
+        part_path = f"{job_id}/part/{job_id}_part{ext}"
         minio_client.put_object(
             bucket,
             part_path,
@@ -204,14 +214,14 @@ def merge_and_partition_map(
             length=len(part_data),
             content_type="text/plain"
         )
-        logger.debug(f"[utility.py] uploaded part 0: {len(all_pairs)} pairs → {base}_{job_id}_part")
+        logger.debug(f"[utility.py] uploaded part 0: {len(all_pairs)} pairs → {job_id}/part/{job_id}_part{ext}")
         return [part_path]
 
     part_paths = []
 
     for idx, part in enumerate(parts):
         part_data = ("\n".join(f"{k}\t{v}" for k, v in part) + "\n").encode("utf-8")
-        part_path = f"{base}_{job_id}_part/{file_name}_part_{idx}{ext}"
+        part_path = f"{job_id}/part/{job_id}_part_{idx}{ext}"
         minio_client.put_object(
             bucket,
             part_path,
@@ -220,6 +230,69 @@ def merge_and_partition_map(
             content_type="text/plain"
         )
         part_paths.append(part_path)
-        logger.debug(f"[utility.py] uploaded partition {idx}: {len(part)} pairs → {base}_{job_id}_part")
+        logger.debug(f"[utility.py] uploaded part {idx}: {len(part)} pairs → {job_id}/part/{job_id}_part_{idx}{ext}")
 
     return part_paths
+
+def final_reduce_merge(job_id: str, reducer_outputs: list[str], output_path: str):
+    if not reducer_outputs:
+        logger.warning(f"[final-merge] no reducer outputs for job={job_id}")
+        return
+
+    merged_lines = []
+
+    for path in reducer_outputs:
+        try:
+            resp = minio_client.get_object(settings.MINIO_BUCKET, path)
+            data = resp.read().decode("utf-8")
+            resp.close()
+
+            merged_lines.extend(data.splitlines())
+
+        except Exception as ex:
+            logger.warning(f"[final-merge] failed reading {path}: {ex}")
+
+    merged_lines.sort()
+
+    final_data = ("\n".join(merged_lines) + "\n").encode("utf-8")
+
+    minio_client.put_object(
+        settings.MINIO_BUCKET,
+        output_path,
+        data=io.BytesIO(final_data),
+        length=len(final_data),
+        content_type="text/plain"
+    )
+
+    logger.info(f"[final-merge] created final output → {output_path}")
+
+
+def cleanup_job_files(
+    job_id: str,
+    map_paths: list[str],
+    reduce_input_paths: list[str],
+    reduce_output_paths: list[str],
+) -> None:
+    files: list[str] = []
+
+    if map_paths:
+        files.extend(map_paths)
+
+    if reduce_input_paths:
+        files.extend(reduce_input_paths)
+
+    if reduce_output_paths:
+        files.extend(reduce_output_paths)
+
+    if not files:
+        logger.info(f"[cleanup] job={job_id} nothing to delete")
+        return
+
+    logger.info(f"[cleanup] {files}")
+
+    try:
+        delete_files(files)
+        logger.info(f"[cleanup] job={job_id} deleted={len(files)} files")
+
+    except Exception as ex:
+        logger.warning(f"[cleanup] job={job_id} cleanup failed: {ex}")

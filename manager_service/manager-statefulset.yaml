@@ -7,7 +7,7 @@ metadata:
     app: manager-service
 spec:
   serviceName: manager-service
-  replicas: 2
+  replicas: 1
 
   selector:
     matchLabels:
@@ -20,6 +20,31 @@ spec:
 
     spec:
       serviceAccountName: manager-sa
+
+      initContainers:
+        - name: wait-for-postgres
+          image: busybox
+          command:
+          - sh
+          - -c
+          - |
+            until nc -z jobs-db.mapreduce.svc.cluster.local 5432; do
+             echo "Waiting for Postgres..."
+              sleep 2
+            done
+            echo "Postgres is ready."
+
+        - name: wait-for-minio
+          image: busybox
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z minio.mapreduce.svc.cluster.local 9000; do
+              echo "Waiting for MinIO..."
+              sleep 2
+              done
+              echo "MinIO is ready."
 
       containers:
         - name: manager-service
@@ -36,25 +61,29 @@ spec:
           env:
             - name: MANAGER_NAMESPACE
               value: "mapreduce"
-            - name: POSTGRES_SERVER
-              value: "host.docker.internal"
+            - name: JOBS_DB_NAME
+              value: "jobs-db.mapreduce.svc.cluster.local"
             - name: POSTGRES_PORT
-              value: "5433"
+              value: "5432"
             - name: MINIO_ENDPOINT
-              value: "host.docker.internal:9000"
+              value: "minio.mapreduce.svc.cluster.local:9000"
             - name: MANAGER_MAPPER_INPUT_SIZE
               value: "512"
+            - name: MANAGER_REFRESH_PERIOD
+              value: "10"
+            - name: MANAGER_WORKER_IMAGE_NAME
+              value: "map-reduce-app-manager_worker:latest"
 
           readinessProbe:
             httpGet:
               path: /health
               port: 8001
-            initialDelaySeconds: 5
+            initialDelaySeconds: 15
             periodSeconds: 10
 
           livenessProbe:
             httpGet:
               path: /health
               port: 8001
-            initialDelaySeconds: 15
+            initialDelaySeconds: 30
             periodSeconds: 20

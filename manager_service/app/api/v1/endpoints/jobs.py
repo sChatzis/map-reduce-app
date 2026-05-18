@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 @router.post("/jobs", response_model=JobOut, status_code=201)
 async def add_job(req: JobCreate, db: AsyncSession = Depends(get_db)):
     logger.info("[jobs.py] add_job")
+
     job = await job_service.job_add(req, db)
 
     if job is None:
@@ -26,23 +27,36 @@ async def add_job(req: JobCreate, db: AsyncSession = Depends(get_db)):
     num_chunks = utility.calculate_num_chunks(job.input_files)
     num_partitions = utility.calculate_num_partitions(num_chunks)
 
-    input_split = utility.split_input_file_to_chunks(job.input_files, job.job_id)
-    output_split = utility.generate_map_output_paths(job.input_files, job.job_id, num_chunks)
+    if num_chunks < 1 or num_partitions < 1:
+        raise HTTPException(status_code=400, detail="Invalid chunk/partition count")
 
-    tasks = await task_service.task_add_batch(job.job_id, TaskType.MAP, input_split, output_split, db)
+    await job_service.job_update_num_mappers(job.job_id, num_chunks, db)
+    await job_service.job_update_num_reducers(job.job_id, num_partitions, db)
 
-    if len(tasks) == 0:
+    map_inputs = utility.split_input_file_to_chunks(job.input_files, job.job_id)
+    map_outputs = utility.generate_map_output_paths(
+        job.input_files,
+        job.job_id,
+        num_chunks
+    )
+
+    map_tasks = await task_service.task_add_batch(
+        job.job_id,
+        TaskType.MAP,
+        map_inputs,
+        map_outputs,
+        db
+    )
+
+    if not map_tasks:
         raise HTTPException(status_code=500, detail="Map tasks insert failed")
 
-    input_split = utility.generate_reduce_input_paths(job.input_files, job.job_id, num_partitions)
-    output_split = utility.generate_reduce_output_paths(job.input_files, job.job_id, num_partitions)
+    updated_job = await job_service.job_get(job.job_id, db)
 
-    tasks = await task_service.task_add_batch(job.job_id, TaskType.REDUCE, input_split, output_split, db)
+    if not updated_job:
+        raise HTTPException(status_code=500, detail="Job retrieval failed")
 
-    if len(tasks) == 0:
-        raise HTTPException(status_code=500, detail="Reduce tasks insert failed")
-
-    return job
+    return updated_job
 
 
 @router.get("/jobs", response_model=list[JobOut])

@@ -12,6 +12,7 @@ WORKDIR /app
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 
 COPY ./app /app/app
+COPY ./test_input.txt /app/test_input.txt
 
 EXPOSE 8001
 

@@ -1,7 +1,7 @@
 from typing import Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import update, select, func
 
 from app.models.task import Task
 from app.models.enums import TaskType, TaskStatus
@@ -30,7 +30,6 @@ async def task_add(
     )
 
     db.add(task)
-
     await db.commit()
     await db.refresh(task)
 
@@ -87,6 +86,38 @@ async def task_get_all(db: AsyncSession) -> list[Task]:
     return list(result.scalars().all())
 
 
+async def task_get_all_idle(db: AsyncSession) -> list[Task]:
+    result = await db.execute(select(Task).where(Task.status == TaskStatus.IDLE))
+    return list(result.scalars().all())
+
+
+async def task_get_map_jobs(db: AsyncSession) -> list[str]:
+    result = await db.execute(
+        select(Task.job_id)
+        .distinct()
+        .where(Task.type == TaskType.MAP)
+    )
+
+    return [row[0] for row in result.all()]
+
+
+async def task_get_completed_map_tasks_by_jobs(
+    job_ids: list[str],
+    db: AsyncSession
+) -> list[Task]:
+    if not job_ids:
+        return []
+
+    result = await db.execute(
+        select(Task)
+        .where(Task.job_id.in_(job_ids))
+        .where(Task.type == TaskType.MAP)
+        .where(Task.status == TaskStatus.COMPLETED)
+    )
+
+    return list(result.scalars().all())
+
+
 async def task_get_by_job(job_id: str, db: AsyncSession) -> list[Task]:
     if not is_valid_uuid(job_id):
         return []
@@ -95,25 +126,183 @@ async def task_get_by_job(job_id: str, db: AsyncSession) -> list[Task]:
     return list(result.scalars().all())
 
 
+async def task_get_reduce_by_job(job_id: str, db: AsyncSession) -> list[Task]:
+    if not is_valid_uuid(job_id):
+        return []
+
+    result = await db.execute(
+        select(Task)
+        .where(Task.job_id == job_id)
+        .where(Task.type == TaskType.REDUCE)
+        .order_by(Task.task_id)
+    )
+
+    return list(result.scalars().all())
+
+
+async def task_get_by_worker(worker_pod_id: str, db: AsyncSession) -> list[Task]:
+    if not is_valid_uuid(worker_pod_id):
+        return []
+
+    result = await db.execute(select(Task).where(Task.worker_pod_id == worker_pod_id))
+    return list(result.scalars().all())
+
+
+async def task_get_by_worker_batch(
+    worker_pod_ids: list[str],
+    db: AsyncSession
+) -> list[Task]:
+    valid_ids = [wid for wid in worker_pod_ids if is_valid_uuid(wid)]
+
+    if not valid_ids:
+        return []
+
+    result = await db.execute(
+        select(Task).where(Task.worker_pod_id.in_(valid_ids))
+    )
+
+    return list(result.scalars().all())
+
+
 async def task_update_status(task_id: str, new_status: TaskStatus, db: AsyncSession) -> Optional[Task]:
     if not is_valid_uuid(task_id):
         return None
 
-    async with db.begin_nested():
-        result = await db.execute(
-            select(Task)
-            .where(Task.task_id == str(task_id))
-            .with_for_update()
-        )
+    result = await db.execute(
+        select(Task)
+        .where(Task.task_id == task_id)
+        .with_for_update()
+    )
 
-        task = result.scalar_one_or_none()
+    task = result.scalar_one_or_none()
 
-        if task is None:
-            return None
+    if task is None:
+        return None
 
-        task.status = new_status
+    task.status = new_status
 
     await db.commit()
     await db.refresh(task)
 
     return task
+
+
+async def task_update_status_batch(
+    task_ids: list[str],
+    new_status: TaskStatus,
+    db: AsyncSession
+) -> int:
+    valid_ids = [tid for tid in task_ids if is_valid_uuid(tid)]
+
+    if not valid_ids:
+        return 0
+
+    result = await db.execute(
+        update(Task)
+        .where(Task.task_id.in_(valid_ids))
+        .where(Task.status != new_status)
+        .values(status=new_status)
+    )
+
+    await db.commit()
+
+    return result.rowcount or 0
+
+
+async def task_update_worker(task_id: str, worker_pod_id: str, db: AsyncSession) -> Optional[Task]:
+    if not is_valid_uuid(task_id) or not is_valid_uuid(worker_pod_id):
+        return None
+
+    result = await db.execute(
+        select(Task)
+        .where(Task.task_id == task_id)
+        .with_for_update()
+    )
+
+    task = result.scalar_one_or_none()
+
+    if task is None:
+        return None
+
+    task.worker_pod_id = worker_pod_id
+
+    await db.commit()
+    await db.refresh(task)
+
+    return task
+
+
+async def task_update_worker_batch(
+    task_ids: list[str],
+    worker_pod_ids: list[str],
+    db: AsyncSession
+) -> int:
+
+    valid_task_ids = [tid for tid in task_ids if is_valid_uuid(tid)]
+    valid_worker_ids = [wid for wid in worker_pod_ids if is_valid_uuid(wid)]
+
+    if not valid_task_ids or not valid_worker_ids:
+        return 0
+
+    if len(valid_task_ids) != len(valid_worker_ids):
+        raise ValueError("task_ids and worker_pod_ids must match 1:1")
+
+    updates = list(zip(valid_task_ids, valid_worker_ids))
+
+    result_count = 0
+
+    for task_id, worker_id in updates:
+        result = await db.execute(
+            update(Task)
+            .where(Task.task_id == task_id)
+            .where(Task.worker_pod_id.is_(None))
+            .values(worker_pod_id=worker_id)
+        )
+        result_count += result.rowcount or 0
+
+    await db.commit()
+    return result_count
+
+
+async def task_are_maps_done(job_id: str, db: AsyncSession) -> bool:
+    statement = (
+        select(func.count())
+        .select_from(Task)
+        .where(Task.job_id == job_id)
+        .where(Task.type == TaskType.MAP)
+        .where(Task.status != TaskStatus.COMPLETED)
+    )
+
+    result = await db.execute(statement)
+    remaining = result.scalar_one()
+
+    return remaining == 0
+
+
+async def task_are_maps_done_batch(
+    job_ids: list[str],
+    db: AsyncSession
+) -> dict[str, bool]:
+
+    if not job_ids:
+        return {}
+
+    statement = (
+        select(
+            Task.job_id,
+            func.count(Task.task_id).label("remaining")
+        )
+        .where(Task.job_id.in_(job_ids))
+        .where(Task.type == TaskType.MAP)
+        .where(Task.status != TaskStatus.COMPLETED)
+        .group_by(Task.job_id)
+    )
+
+    result = await db.execute(statement)
+
+    remaining_map = {row.job_id: row.remaining for row in result.all()}
+
+    return {
+        job_id: remaining_map.get(job_id, 0) == 0
+        for job_id in job_ids
+    }
