@@ -100,7 +100,6 @@ services:
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
 
       MANAGER_NAMESPACE: "mapreduce"
-      MANAGER_MAPPER_INPUT_SIZE: 512
       MANAGER_WORKER_IMAGE_NAME: "map-reduce-app-manager_worker:latest"
       MANAGER_REFRESH_PERIOD: 10
 

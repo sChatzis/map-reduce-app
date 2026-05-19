@@ -67,8 +67,6 @@ spec:
               value: "5432"
             - name: MINIO_ENDPOINT
               value: "minio.mapreduce.svc.cluster.local:9000"
-            - name: MANAGER_MAPPER_INPUT_SIZE
-              value: "512"
             - name: MANAGER_REFRESH_PERIOD
               value: "10"
             - name: MANAGER_WORKER_IMAGE_NAME

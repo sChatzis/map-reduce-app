@@ -20,7 +20,6 @@ class Settings:
 
     MANAGER_NAMESPACE: str = os.environ["MANAGER_NAMESPACE"]
     MANAGER_WORKER_IMAGE_NAME: str = os.environ["MANAGER_WORKER_IMAGE_NAME"]
-    MANAGER_MAPPER_INPUT_SIZE: int = int(os.environ["MANAGER_MAPPER_INPUT_SIZE"])
     MANAGER_REFRESH_PERIOD: int = int(os.environ["MANAGER_REFRESH_PERIOD"])
 
     MINIO_ENDPOINT: str =  os.environ["MINIO_ENDPOINT"]
