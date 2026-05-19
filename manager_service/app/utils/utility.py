@@ -2,6 +2,7 @@ import os
 import io
 import re
 import math
+import hashlib
 import logging
 import uuid
 
@@ -154,6 +155,17 @@ def split_input_file_to_chunks(
     return chunk_paths
 
 
+def partition_for_key(key: str, num_reducers: int) -> int:
+    """Stable partition: same ``key`` → same reducer across processes and runs.
+
+    Uses md5 — not Python's ``hash()``, which is salted per-process via
+    PYTHONHASHSEED (PEP 456) and so would re-shuffle keys on a manager
+    restart, breaking the MapReduce partition invariant. Not a security
+    boundary; we just need a deterministic 128-bit spread.
+    """
+    return int(hashlib.md5(key.encode("utf-8")).hexdigest(), 16) % num_reducers
+
+
 def merge_and_partition_map(
     input_object: str,
     job_id: str,
@@ -177,7 +189,7 @@ def merge_and_partition_map(
                 if "\t" not in line:
                     continue
                 key, value = line.split("\t", 1)
-                reducer_idx = hash(key) % num_reducers
+                reducer_idx = partition_for_key(key, num_reducers)
                 parts[reducer_idx].append((key, value))
 
         except Exception as ex:
