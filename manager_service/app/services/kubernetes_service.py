@@ -1,3 +1,4 @@
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.settings import settings
@@ -6,14 +7,13 @@ from app.models.enums import *
 from app.models.job import Job
 from app.models.task import Task
 from app.models.worker import Worker
-from app.services.job_service import job_get_batch, job_update_status
+from app.services.job_service import job_get_batch
 from app.services.task_service import (
     task_get_all_idle,
     task_are_maps_done_batch,
     task_update_status_batch,
     task_update_worker_batch,
-    task_get_by_worker_batch, task_get_map_jobs, task_get_completed_map_tasks_by_jobs, task_add_batch,
-    task_get_reduce_by_job
+    task_get_by_worker_batch, task_get_map_jobs, task_get_completed_map_tasks_by_jobs,
 )
 from app.services.worker_service import (
     worker_update_status_batch,
@@ -247,62 +247,124 @@ async def check_for_map_merge(db: AsyncSession):
         if task.data_location:
             job_to_paths.setdefault(task.job_id, []).append(task.data_location)
 
-    for job in jobs:
+    # Snapshot job IDs as plain strings before closing the read tx. Any
+    # later expiry (commit clears the tx but doesn't expire when
+    # ``expire_on_commit=False``; rollback inside a per-job locked block
+    # on exception WILL expire all attributes regardless) cannot fault
+    # plain strings.
+    job_ids_to_process = [j.job_id for j in jobs]
+
+    # End the read tx so per-job ``Session.begin()`` blocks can each
+    # open their own — ``Session.begin()`` raises if a tx is in progress.
+    # Commit (not rollback) because there's nothing to undo; the pre-loop
+    # reads did no writes.
+    await db.commit()
+
+    for job_id in job_ids_to_process:
         try:
-            map_paths = job_to_paths.get(job.job_id, [])
+            # SELECT FOR UPDATE on the Job row serializes the
+            # read-decide-write across manager replicas. Both
+            # MAP→REDUCE (shuffle + create reducers) and
+            # REDUCE→COMPLETED (final merge + status flip) run
+            # under the same lock; the pre-loop reads above are
+            # only a fast path, the in-lock re-reads are what the
+            # race guard rests on.
+            #
+            # Note: ``merge_and_partition_map`` and
+            # ``final_reduce_merge`` do MinIO I/O while the row lock
+            # is held. At our scale this is acceptable; a production
+            # system would stage outside the lock and only do DB
+            # writes inside it.
+            async with db.begin():
+                locked_job = (
+                    await db.execute(
+                        select(Job)
+                        .where(Job.job_id == job_id)
+                        .with_for_update()
+                    )
+                ).scalar_one_or_none()
 
-            if len(map_paths) != int(job.num_mappers):
-                logger.warning(
-                    f"[map-merge] skipping job={job.job_id} "
-                    f"expected={job.num_mappers} found={len(map_paths)}"
+                if locked_job is None or locked_job.status == JobStatus.COMPLETED:
+                    continue
+
+                map_paths = job_to_paths.get(locked_job.job_id, [])
+
+                if len(map_paths) != int(locked_job.num_mappers):
+                    logger.warning(
+                        f"[map-merge] skipping job={locked_job.job_id} "
+                        f"expected={locked_job.num_mappers} found={len(map_paths)}"
+                    )
+                    continue
+
+                reduce_tasks = list((
+                    await db.execute(
+                        select(Task)
+                        .where(Task.job_id == locked_job.job_id)
+                        .where(Task.type == TaskType.REDUCE)
+                        .order_by(Task.task_id)
+                    )
+                ).scalars().all())
+
+                if reduce_tasks:
+                    if all(t.status == TaskStatus.COMPLETED for t in reduce_tasks):
+                        finalize_job(locked_job, reduce_tasks, map_paths)
+                        locked_job.status = JobStatus.COMPLETED
+                    continue
+
+                part_paths = merge_and_partition_map(
+                    input_object=locked_job.input_files,
+                    job_id=locked_job.job_id,
+                    map_paths=map_paths,
+                    num_reducers=int(locked_job.num_reducers),
                 )
-                continue
 
-            existing_reduce_tasks = await task_get_reduce_by_job(job.job_id, db)
+                if not part_paths:
+                    logger.warning(f"[map-merge] no partitions job={locked_job.job_id}")
+                    continue
 
-            if existing_reduce_tasks:
-                reducer_done = all(t.status == TaskStatus.COMPLETED for t in existing_reduce_tasks)
+                reduce_output_paths = generate_reduce_output_paths(
+                    orig_path=locked_job.input_files,
+                    job_id=locked_job.job_id,
+                    num_reducers=int(locked_job.num_reducers),
+                )
 
-                if reducer_done:
-                    await finalize_job(job, existing_reduce_tasks, map_paths, db)
+                # Invariant previously enforced inside ``task_add_batch`` —
+                # inlining the writes (to keep them under the row lock) drops
+                # that check, so reassert it here.
+                assert len(part_paths) == len(reduce_output_paths), (
+                    f"shuffle/output-path length mismatch for job={locked_job.job_id}: "
+                    f"{len(part_paths)} != {len(reduce_output_paths)}"
+                )
 
-                continue
+                # Inline ``db.add`` — NOT ``task_add_batch``, which commits
+                # internally and would release the FOR UPDATE lock mid-
+                # transition. The outer ``async with db.begin()`` block
+                # commits everything atomically on exit.
+                for input_split, data_location in zip(part_paths, reduce_output_paths):
+                    db.add(Task(
+                        job_id=locked_job.job_id,
+                        type=TaskType.REDUCE,
+                        status=TaskStatus.IDLE,
+                        input_split=input_split,
+                        data_location=data_location,
+                    ))
 
-            part_paths = merge_and_partition_map(
-                input_object=job.input_files,
-                job_id=job.job_id,
-                map_paths=map_paths,
-                num_reducers=int(job.num_reducers),
-            )
-
-            if not part_paths:
-                logger.warning(f"[map-merge] no partitions job={job.job_id}")
-                continue
-
-            reduce_output_paths = generate_reduce_output_paths(
-                orig_path=job.input_files,
-                job_id=job.job_id,
-                num_reducers=int(job.num_reducers),
-            )
-
-            await task_add_batch(
-                job_id=job.job_id,
-                task_type=TaskType.REDUCE,
-                input_splits=part_paths,
-                data_locations=reduce_output_paths,
-                db=db,
-            )
-
-            logger.info(
-                f"[map-merge] created reducers job={job.job_id} "
-                f"maps={len(map_paths)} reducers={len(reduce_output_paths)}"
-            )
+                logger.info(
+                    f"[map-merge] created reducers job={locked_job.job_id} "
+                    f"maps={len(map_paths)} reducers={len(reduce_output_paths)}"
+                )
 
         except Exception as ex:
-            logger.warning(f"[map-merge] failed job={job.job_id}: {ex}")
+            logger.warning(f"[map-merge] failed job={job_id}: {ex}")
 
 
-async def finalize_job(job: Job, tasks: list[Task], map_paths: list[str], db: AsyncSession):
+def finalize_job(job: Job, tasks: list[Task], map_paths: list[str]) -> None:
+    """MinIO I/O for job completion. Caller commits ``job.status``.
+
+    Separated from the DB write so it can run inside a SELECT FOR UPDATE
+    block — ``job_update_status`` commits internally and would release
+    the row lock, defeating the race guard.
+    """
     final_reduce_merge(
         job_id=job.job_id,
         reducer_outputs=[t.data_location for t in tasks],
@@ -310,17 +372,14 @@ async def finalize_job(job: Job, tasks: list[Task], map_paths: list[str], db: As
     )
 
     reducer_outputs = [t.data_location for t in tasks if t.data_location]
-
     reducer_inputs = [t.input_split for t in tasks if t.input_split]
 
     cleanup_job_files(
         job_id=job.job_id,
         map_paths=map_paths,
         reduce_input_paths=reducer_inputs,
-        reduce_output_paths=reducer_outputs
+        reduce_output_paths=reducer_outputs,
     )
-
-    await job_update_status(job.job_id, JobStatus.COMPLETED, db)
 
 
 # =========================================================
