@@ -91,6 +91,11 @@ async def task_get_all_idle(db: AsyncSession) -> list[Task]:
     return list(result.scalars().all())
 
 
+async def task_get_in_progress(db: AsyncSession) -> list[Task]:
+    result = await db.execute(select(Task).where(Task.status == TaskStatus.IN_PROGRESS))
+    return list(result.scalars().all())
+
+
 async def task_get_map_jobs(db: AsyncSession) -> list[str]:
     result = await db.execute(
         select(Task.job_id)

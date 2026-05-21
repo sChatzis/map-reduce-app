@@ -1,4 +1,4 @@
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.settings import settings
@@ -10,6 +10,7 @@ from app.models.worker import Worker
 from app.services.job_service import job_get_batch
 from app.services.task_service import (
     task_get_all_idle,
+    task_get_in_progress,
     task_are_maps_done_batch,
     task_update_status_batch,
     task_update_worker_batch,
@@ -70,6 +71,7 @@ async def _schedule(db: AsyncSession):
     )
 
     await update_finished_workers(db)
+    await recover_orphaned_tasks(db)
     await check_for_map_merge(db)
 
     new_tasks, new_pod_names = await create_worker_names_for_idle_tasks(db)
@@ -211,6 +213,123 @@ async def get_finished_workers() -> tuple[list[str], list[str]]:
     except Exception as ex:
         logger.warning(f"[kubernetes_service.py]: Exception occurred [{ex}]")
         return [], []
+
+
+# =========================================================
+# ORPHAN RECOVERY
+# =========================================================
+
+async def _list_alive_worker_ids() -> set[str] | None:
+    """Return the worker_ids of every K8s Job currently in the namespace.
+
+    Strips the ``worker-`` prefix so the returned set is directly
+    comparable to ``Task.worker_pod_id`` / ``Worker.worker_id`` — same
+    convention used in ``get_finished_workers``.
+
+    Returns ``None`` to signal "K8s unreachable" so callers don't treat
+    an empty list as "all workers gone" and reset every IN_PROGRESS
+    task on a transient network blip.
+    """
+    try:
+        batch_v1 = get_batch_client()
+        jobs = await asyncio.to_thread(
+            batch_v1.list_namespaced_job,
+            namespace=settings.MANAGER_NAMESPACE,
+        )
+        return {j.metadata.name.replace("worker-", "", 1) for j in jobs.items}
+
+    except Exception as ex:
+        logger.warning(f"[orphan-recovery] failed to list jobs: {ex}")
+        return None
+
+
+async def recover_orphaned_tasks(db: AsyncSession):
+    """Reset tasks whose K8s Job has vanished (kubectl delete, TTL, node loss).
+
+    Workers are output-idempotent — same task_id/data_location produces
+    the same output, so respawning is safe. We reset to IDLE and clear
+    ``worker_pod_id``; ``_schedule`` re-spawns on the next tick.
+
+    Per-task SELECT FOR UPDATE serializes the reset across manager
+    replicas — same pattern as the MAP→REDUCE guard in
+    ``check_for_map_merge``. The loser bails on the in-lock status
+    re-check.
+
+    Worker row deletion happens inside the same locked tx as the task
+    reset: ``Worker.pod_name`` is ``unique=True`` and worker pod names
+    are deterministic (``{task_id}-{type}``), so without deleting the
+    stale row the next tick's ``worker_add_batch`` would throw
+    ``IntegrityError`` when respawning under the same pod name.
+    """
+    alive_worker_ids = await _list_alive_worker_ids()
+
+    if alive_worker_ids is None:
+        return
+
+    in_progress_tasks = await task_get_in_progress(db)
+
+    # Snapshot ``(task_id, worker_pod_id)`` as plain strings. Iterating
+    # ORM objects across a per-task rollback (inside the locked block,
+    # on exception) would fault — see the same pattern in
+    # ``check_for_map_merge``.
+    candidates = [
+        (t.task_id, t.worker_pod_id)
+        for t in in_progress_tasks
+        if t.worker_pod_id and t.worker_pod_id not in alive_worker_ids
+    ]
+
+    # End the read tx so per-task ``Session.begin()`` blocks can each
+    # open their own. Commit (not rollback) because there's nothing to
+    # undo.
+    await db.commit()
+
+    for task_id, _ in candidates:
+        try:
+            async with db.begin():
+                locked = (
+                    await db.execute(
+                        select(Task)
+                        .where(Task.task_id == task_id)
+                        .with_for_update()
+                    )
+                ).scalar_one_or_none()
+
+                if locked is None or locked.status != TaskStatus.IN_PROGRESS:
+                    continue
+
+                # Use the row's CURRENT worker_pod_id, not the snapshot
+                # — another replica may have re-assigned the task to a
+                # fresh worker between snapshot and lock acquisition. If
+                # that fresh worker_id is in our alive set, the task is
+                # no longer orphaned and we leave it alone.
+                stale_worker_id = locked.worker_pod_id
+
+                if stale_worker_id is None or stale_worker_id in alive_worker_ids:
+                    continue
+
+                # Clear the FK from Task → Worker before deleting the
+                # Worker row, otherwise the DELETE violates the FK
+                # constraint. ``autoflush=False`` on the session means
+                # the pending UPDATE isn't auto-pushed before the
+                # next ``db.execute``, so flush explicitly.
+                locked.worker_pod_id = None
+                locked.status = TaskStatus.IDLE
+                await db.flush()
+
+                # Inline ``delete`` — NOT ``worker_delete_batch``, which
+                # commits internally and would release the row lock
+                # mid-transition.
+                await db.execute(
+                    delete(Worker).where(Worker.worker_id == stale_worker_id)
+                )
+
+                logger.info(
+                    f"[orphan-recovery] reset task={task_id} type={locked.type} "
+                    f"worker={stale_worker_id} (k8s job gone)"
+                )
+
+        except Exception as ex:
+            logger.warning(f"[orphan-recovery] failed task={task_id}: {ex}")
 
 
 async def check_for_map_merge(db: AsyncSession):
