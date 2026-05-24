@@ -112,3 +112,18 @@ async def create_worker_job(
         namespace=settings.MANAGER_NAMESPACE,
         body=job
     )
+
+
+async def delete_worker_job(worker_id: str):
+    batch_v1 = _get_batch_client()
+
+    return await asyncio.to_thread(
+        batch_v1.delete_namespaced_job,
+        name=f"worker-{worker_id}",
+        namespace=settings.MANAGER_NAMESPACE,
+        body={
+            "propagationPolicy": "Foreground",
+            "gracePeriodSeconds": 0
+        }
+    )
+

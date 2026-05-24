@@ -1,15 +1,20 @@
 from typing import Optional
 
+
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import update, select, func
+
 
 from app.models.task import Task
 from app.models.enums import TaskType, TaskStatus
 from app.utils.utility import is_valid_uuid
 
+
 import logging
 
+
 logger = logging.getLogger(__name__)
+
 
 async def task_add(
         job_id: str,
@@ -250,7 +255,7 @@ async def task_update_worker_batch(
         return 0
 
     if len(valid_task_ids) != len(valid_worker_ids):
-        raise ValueError("task_ids and worker_pod_ids must match 1:1")
+        raise ValueError("task_ids and worker_pod_ids must match one to one")
 
     updates = list(zip(valid_task_ids, valid_worker_ids))
 
@@ -267,6 +272,49 @@ async def task_update_worker_batch(
 
     await db.commit()
     return result_count
+
+
+async def task_clear_worker(task_id: str, db: AsyncSession) -> bool:
+    if not is_valid_uuid(task_id):
+        return False
+
+    result = await db.execute(
+        select(Task)
+        .where(Task.task_id == task_id)
+        .with_for_update()
+    )
+
+    task = result.scalar_one_or_none()
+
+    if task is None:
+        return False
+
+    task.worker_pod_id = None
+
+    await db.commit()
+    await db.refresh(task)
+
+    return True
+
+
+async def task_clear_worker_batch(
+    task_ids: list[str],
+    db: AsyncSession
+) -> int:
+    valid_ids = [tid for tid in task_ids if is_valid_uuid(tid)]
+
+    if not valid_ids:
+        return 0
+
+    result = await db.execute(
+        update(Task)
+        .where(Task.task_id.in_(valid_ids))
+        .values(worker_pod_id=None)
+    )
+
+    await db.commit()
+
+    return result.rowcount or 0
 
 
 async def task_are_maps_done(job_id: str, db: AsyncSession) -> bool:

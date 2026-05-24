@@ -9,13 +9,16 @@ from app.schemas.job import JobCreate
 from app.utils.utility import is_valid_path, is_valid_uuid
 from app.services.minio_service import file_exists
 
+import os
 import logging
+
 
 logger = logging.getLogger(__name__)
 
+
 async def job_add(req: JobCreate, db: AsyncSession) -> Optional[Job]:
     if req.user_id <= 0:
-        logger.warning(f"[job_service] job_add: user_id not valid [{req.user_id}]")
+        logger.warning(f"\n[job_add] user_id not valid {req.user_id}\n")
         return None
 
     for field_name, value in [
@@ -24,26 +27,24 @@ async def job_add(req: JobCreate, db: AsyncSession) -> Optional[Job]:
         ("reducer_code", req.reducer_code),
     ]:
         if not is_valid_path(value):
-            logger.warning(f"[job_service] job_add: invalid path for {field_name} [{value}]")
+            logger.warning(f"\n[job_add] invalid path for {field_name} {value}\n")
             return None
         try:
             if not file_exists(value):
-                logger.warning(f"[job_service] job_add: file doesn't exist [{value}]")
+                logger.warning(f"\n[job_add] file doesn't exist {value}\n")
                 return None
         except Exception as ex:
-            logger.warning(f"[job_service] job_add: exception occurred with minio client [{ex}]")
+            logger.warning(f"\n[job_add] exception occurred with minio client {ex}\n")
             return None
 
     if (req.output_path != "") and not is_valid_path(req.output_path):
-        logger.warning(f"[job_service] job_add: invalid output path[{value}]")
+        logger.warning(f"\n[job_add] invalid output path {value}\n")
         return None
-
-    output_path = req.output_path
 
     job = Job(
         status=JobStatus.SUBMITTED,
         input_files=req.input_files,
-        output_path=output_path,
+        output_path=req.output_path,
         mapper_code=req.mapper_code,
         reducer_code=req.reducer_code,
         user_id=str(req.user_id),
@@ -52,6 +53,15 @@ async def job_add(req: JobCreate, db: AsyncSession) -> Optional[Job]:
     )
 
     db.add(job)
+
+    await db.commit()
+    await db.refresh(job)
+
+    if job.output_path:
+        job.output_path = f"{job.job_id}/{job.output_path}"
+    else:
+        _, ext = os.path.splitext(job.input_files)
+        job.output_path = f"{job.job_id}/{job.job_id}_output{ext}"
 
     await db.commit()
     await db.refresh(job)

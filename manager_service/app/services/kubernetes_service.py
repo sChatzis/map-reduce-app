@@ -1,5 +1,7 @@
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
+from functools import partial as functools_partial
+
 
 from app.core.settings import settings
 from app.db.database import AsyncSessionLocal
@@ -14,43 +16,58 @@ from app.services.task_service import (
     task_are_maps_done_batch,
     task_update_status_batch,
     task_update_worker_batch,
-    task_get_by_worker_batch, task_get_map_jobs, task_get_completed_map_tasks_by_jobs,
+    task_clear_worker_batch,
+    task_get_by_worker_batch,
+    task_get_map_jobs,
+    task_get_completed_map_tasks_by_jobs,
 )
 from app.services.worker_service import (
     worker_update_status_batch,
     worker_add_batch,
-    worker_get_batch,
+    worker_get_batch, worker_delete_batch,
 )
-from app.kubernetes_client import (
-    create_worker_job,
-    get_batch_client,
-    get_core_client,
+from app.utils.utility import (
+    merge_and_partition_map,
+    generate_reduce_output_paths,
+    final_reduce_merge,
+    cleanup_job_files,
+    validate_partition,
+    validate_map_outputs,
+    validate_reducers,
+    validate_map_reduce,
 )
-from app.utils.utility import merge_and_partition_map, generate_reduce_output_paths, final_reduce_merge, cleanup_job_files
+
+
+import app.kubernetes_client as kubernetes_client
+
 
 import asyncio
 import logging
 
+
 logger = logging.getLogger(__name__)
+
 
 # =========================================================
 # MAIN LOOP
 # =========================================================
 
-async def safe_monitor():
-    try:
-        await monitor()
-    except Exception as ex:
-        logger.exception(f"[kubernetes_service.py]: monitor crashed [{ex}]")
-
+stop_condition = False
 
 async def monitor():
+    try:
+        await _monitor()
+    except Exception as ex:
+        logger.exception(f"\n[monitor] monitor crashed {ex}\n")
+
+
+async def _monitor():
     while True:
         try:
             await schedule()
             await monitor_running_workers()
         except Exception as ex:
-            logger.warning(f"[kubernetes_service.py]: Exception occurred: {ex}")
+            logger.warning(f"\n[_monitor] exception occurred {ex}\n")
 
         await asyncio.sleep(settings.MANAGER_REFRESH_PERIOD)
 
@@ -64,10 +81,11 @@ async def schedule():
 # SCHEDULER
 # =========================================================
 
+
 async def _schedule(db: AsyncSession):
     logger.info(
-        f"[kubernetes_service.py]: Monitoring kubernetes workers "
-        f"at period {settings.MANAGER_REFRESH_PERIOD}s"
+        f"\n[_schedule] Monitoring kubernetes workers "
+        f"at period {settings.MANAGER_REFRESH_PERIOD} s\n"
     )
 
     await update_finished_workers(db)
@@ -94,7 +112,7 @@ async def _schedule(db: AsyncSession):
 
         script = job.mapper_code if task.type == TaskType.MAP else job.reducer_code
 
-        await create_worker_job(
+        await kubernetes_client.create_worker_job(
             worker_id=worker.worker_id,
             pod_name=worker.pod_name,
             script_fpath=script,
@@ -109,6 +127,7 @@ async def _schedule(db: AsyncSession):
 # =========================================================
 # STATUS UPDATES
 # =========================================================
+
 
 async def update_new_workers_and_tasks(
     workers: list[Worker],
@@ -128,14 +147,15 @@ async def update_new_workers_and_tasks(
     )
 
     logger.info(
-        f"[kubernetes_service.py]: workers ACTIVE {worker_result}/{len(workers)}, "
-        f"tasks IN_PROGRESS {task_result}/{len(tasks)}"
+        f"\n[update_new_workers_and_tasks] workers ACTIVE {worker_result}/{len(workers)}, "
+        f"tasks IN_PROGRESS {task_result}/{len(tasks)}\n"
     )
 
 
 # =========================================================
 # TASK CREATION
 # =========================================================
+
 
 async def create_worker_names_for_idle_tasks(
     db: AsyncSession
@@ -156,17 +176,16 @@ async def create_worker_names_for_idle_tasks(
 # FINISHED WORKERS
 # =========================================================
 
+
 async def update_finished_workers(db: AsyncSession):
     successful_workers, failed_workers = await get_finished_workers()
 
     successful_tasks = await task_get_by_worker_batch(successful_workers, db)
     failed_tasks = await task_get_by_worker_batch(failed_workers, db)
 
-    await worker_update_status_batch(
-        successful_workers,
-        WorkerStatus.IDLE,
-        db
-    )
+    await task_clear_worker_batch([t.task_id for t in successful_tasks], db)
+
+    await worker_delete_batch(successful_workers, db)
 
     await task_update_status_batch(
         [t.task_id for t in successful_tasks],
@@ -186,10 +205,16 @@ async def update_finished_workers(db: AsyncSession):
         db
     )
 
+    for worker in successful_workers:
+        try:
+            await kubernetes_client.delete_worker_job(worker)
+        except Exception as ex:
+            logger.warning(f"\n[update_finished_workers] exception occurred {ex}\n")
+
 
 async def get_finished_workers() -> tuple[list[str], list[str]]:
     try:
-        batch_v1 = get_batch_client()
+        batch_v1 = kubernetes_client.get_batch_client()
 
         jobs = await asyncio.to_thread(
             batch_v1.list_namespaced_job,
@@ -211,13 +236,14 @@ async def get_finished_workers() -> tuple[list[str], list[str]]:
         return successful, failed
 
     except Exception as ex:
-        logger.warning(f"[kubernetes_service.py]: Exception occurred [{ex}]")
+        logger.warning(f"\n[get_finished_workers] exception occurred {ex}\n")
         return [], []
 
 
 # =========================================================
 # ORPHAN RECOVERY
 # =========================================================
+
 
 async def _list_alive_worker_ids() -> set[str] | None:
     """Return the worker_ids of every K8s Job currently in the namespace.
@@ -231,7 +257,7 @@ async def _list_alive_worker_ids() -> set[str] | None:
     task on a transient network blip.
     """
     try:
-        batch_v1 = get_batch_client()
+        batch_v1 = kubernetes_client.get_batch_client()
         jobs = await asyncio.to_thread(
             batch_v1.list_namespaced_job,
             namespace=settings.MANAGER_NAMESPACE,
@@ -239,7 +265,7 @@ async def _list_alive_worker_ids() -> set[str] | None:
         return {j.metadata.name.replace("worker-", "", 1) for j in jobs.items}
 
     except Exception as ex:
-        logger.warning(f"[orphan-recovery] failed to list jobs: {ex}")
+        logger.warning(f"\n[_list_alive_worker_ids] failed to list jobs {ex}\n")
         return None
 
 
@@ -324,12 +350,12 @@ async def recover_orphaned_tasks(db: AsyncSession):
                 )
 
                 logger.info(
-                    f"[orphan-recovery] reset task={task_id} type={locked.type} "
-                    f"worker={stale_worker_id} (k8s job gone)"
+                    f"\n[recover_orphaned_tasks] reset task {task_id} type {locked.type} "
+                    f"worker {stale_worker_id}\n"
                 )
 
         except Exception as ex:
-            logger.warning(f"[orphan-recovery] failed task={task_id}: {ex}")
+            logger.warning(f"\n[recover_orphaned_tasks] failed task {task_id} {ex}\n")
 
 
 async def check_for_map_merge(db: AsyncSession):
@@ -361,10 +387,15 @@ async def check_for_map_merge(db: AsyncSession):
         return
 
     job_to_paths: dict[str, list[str]] = {}
+    job_to_chunks: dict[str, list[str]] = {}
 
     for task in map_tasks:
         if task.data_location:
             job_to_paths.setdefault(task.job_id, []).append(task.data_location)
+
+        if task.input_split:
+            job_to_chunks.setdefault(task.job_id, []).append(task.input_split)
+
 
     # Snapshot job IDs as plain strings before closing the read tx. Any
     # later expiry (commit clears the tx but doesn't expire when
@@ -407,11 +438,12 @@ async def check_for_map_merge(db: AsyncSession):
                     continue
 
                 map_paths = job_to_paths.get(locked_job.job_id, [])
+                chunk_paths = job_to_chunks.get(locked_job.job_id, [])
 
                 if len(map_paths) != int(locked_job.num_mappers):
                     logger.warning(
-                        f"[map-merge] skipping job={locked_job.job_id} "
-                        f"expected={locked_job.num_mappers} found={len(map_paths)}"
+                        f"\n[check_for_map_merge] skipping job {locked_job.job_id}"
+                        f"\nexpected {locked_job.num_mappers} found {len(map_paths)}\n"
                     )
                     continue
 
@@ -426,9 +458,12 @@ async def check_for_map_merge(db: AsyncSession):
 
                 if reduce_tasks:
                     if all(t.status == TaskStatus.COMPLETED for t in reduce_tasks):
-                        finalize_job(locked_job, reduce_tasks, map_paths)
+                        finalize_job(locked_job, reduce_tasks, chunk_paths, map_paths)
                         locked_job.status = JobStatus.COMPLETED
+                        continue
                     continue
+
+                validate_map_outputs(chunk_paths, map_paths)
 
                 part_paths = merge_and_partition_map(
                     input_object=locked_job.input_files,
@@ -438,8 +473,10 @@ async def check_for_map_merge(db: AsyncSession):
                 )
 
                 if not part_paths:
-                    logger.warning(f"[map-merge] no partitions job={locked_job.job_id}")
+                    logger.warning(f"\n[check_for_map_merge] no partitions for job {locked_job.job_id}\n")
                     continue
+
+                validate_partition(map_paths, part_paths, locked_job.num_reducers)
 
                 reduce_output_paths = generate_reduce_output_paths(
                     orig_path=locked_job.input_files,
@@ -451,8 +488,8 @@ async def check_for_map_merge(db: AsyncSession):
                 # inlining the writes (to keep them under the row lock) drops
                 # that check, so reassert it here.
                 assert len(part_paths) == len(reduce_output_paths), (
-                    f"shuffle/output-path length mismatch for job={locked_job.job_id}: "
-                    f"{len(part_paths)} != {len(reduce_output_paths)}"
+                    f"\n[check_for_map_merge] shuffle/output-path length mismatch for\njob {locked_job.job_id} "
+                    f"{len(part_paths)} != {len(reduce_output_paths)}\n"
                 )
 
                 # Inline ``db.add`` — NOT ``task_add_batch``, which commits
@@ -469,32 +506,36 @@ async def check_for_map_merge(db: AsyncSession):
                     ))
 
                 logger.info(
-                    f"[map-merge] created reducers job={locked_job.job_id} "
-                    f"maps={len(map_paths)} reducers={len(reduce_output_paths)}"
+                    f"\n[check_for_map_merge] created reducers\n job {locked_job.job_id} "
+                    f"maps {len(map_paths)} reducers {len(reduce_output_paths)}\n"
                 )
 
         except Exception as ex:
-            logger.warning(f"[map-merge] failed job={job_id}: {ex}")
+            logger.warning(f"\n[check_for_map_merge] failed job {job_id} {ex}\n")
 
 
-def finalize_job(job: Job, tasks: list[Task], map_paths: list[str]) -> None:
+def finalize_job(job: Job, tasks: list[Task], chunk_paths: list[str], map_paths: list[str]) -> None:
     """MinIO I/O for job completion. Caller commits ``job.status``.
 
     Separated from the DB write so it can run inside a SELECT FOR UPDATE
     block — ``job_update_status`` commits internally and would release
     the row lock, defeating the race guard.
     """
+    reducer_outputs = [t.data_location for t in tasks]
+    reducer_inputs = [t.input_split for t in tasks]
+
+    validate_reducers(reducer_inputs, reducer_outputs)
+
     final_reduce_merge(
         job_id=job.job_id,
-        reducer_outputs=[t.data_location for t in tasks],
+        reducer_outputs=reducer_outputs,
         output_path=job.output_path,
     )
 
-    reducer_outputs = [t.data_location for t in tasks if t.data_location]
-    reducer_inputs = [t.input_split for t in tasks if t.input_split]
+    validate_map_reduce(job.input_files, job.output_path)
 
     cleanup_job_files(
-        job_id=job.job_id,
+        chunk_paths=chunk_paths,
         map_paths=map_paths,
         reduce_input_paths=reducer_inputs,
         reduce_output_paths=reducer_outputs,
@@ -508,8 +549,8 @@ def finalize_job(job: Job, tasks: list[Task], map_paths: list[str]) -> None:
 
 async def monitor_running_workers():
     try:
-        batch_v1 = get_batch_client()
-        core_v1 = get_core_client()
+        batch_v1 = kubernetes_client.get_batch_client()
+        core_v1 = kubernetes_client.get_core_client()
 
         jobs = await asyncio.to_thread(
             batch_v1.list_namespaced_job,
@@ -517,32 +558,20 @@ async def monitor_running_workers():
         )
 
         for job in jobs.items:
-            job_name = job.metadata.name
-
-            if getattr(job.status, "succeeded", 0) or getattr(job.status, "failed", 0):
-                continue
-
             pods = await asyncio.to_thread(
-                core_v1.list_namespaced_pod,
-                namespace=settings.MANAGER_NAMESPACE,
-                label_selector=f"job-name={job_name}",
+                functools_partial(
+                    core_v1.list_namespaced_pod,
+                    namespace=settings.MANAGER_NAMESPACE,
+                    label_selector=f"job-name={job.metadata.name}",
+                )
             )
 
             for pod in pods.items:
-                try:
-                    logs = await asyncio.to_thread(
-                        core_v1.read_namespaced_pod_log,
-                        name=pod.metadata.name,
-                        namespace=settings.MANAGER_NAMESPACE,
-                        tail_lines=50,
-                    )
-
-                    logger.info(f"[k8s job={job_name} pod={pod.metadata.name}]\n{logs}")
-
-                except Exception as log_ex:
-                    logger.warning(
-                        f"[kubernetes_service.py]: log fetch failed for {pod.metadata.name}: {log_ex}"
-                    )
+                logger.info(
+                    f"\n[monitor_running_workers]\njob {job.metadata.name}\n"
+                    f"pod {pod.metadata.name}\n{pod.status.phase}\n"
+                )
 
     except Exception as ex:
-        logger.warning(f"[kubernetes_service.py]: Exception occurred [{ex}]")
+        logger.warning(f"\n[monitor_running_workers] exception occurred {ex}\n")
+

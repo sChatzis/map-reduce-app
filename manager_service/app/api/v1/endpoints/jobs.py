@@ -17,10 +17,11 @@ logger = logging.getLogger(__name__)
 
 @router.post("/jobs", response_model=JobOut, status_code=201)
 async def add_job(req: JobCreate, db: AsyncSession = Depends(get_db)):
-    logger.info("[jobs.py] add_job")
+    logger.info("\n/jobs [add_job]\n")
 
     if req.num_mappers < 1:
         raise HTTPException(status_code=400, detail="num_mappers must be >= 1")
+
     if req.num_reducers < 1:
         raise HTTPException(status_code=400, detail="num_reducers must be >= 1")
 
@@ -55,13 +56,13 @@ async def add_job(req: JobCreate, db: AsyncSession = Depends(get_db)):
 
 @router.get("/jobs", response_model=list[JobOut])
 async def get_jobs(db: AsyncSession = Depends(get_db)):
-    logger.info("[jobs.py] get_jobs")
+    logger.info("\n/jobs [get_jobs]\n")
     return await job_service.job_get_all(db)
 
 
 @router.get("/jobs/{job_id}", response_model=JobOut)
 async def get_job(job_id: str, db: AsyncSession = Depends(get_db)):
-    logger.info(f"[jobs.py] get_job: job_id [{job_id}]")
+    logger.info(f"\n/jobs/{job_id} [get_job]\n")
     job = await job_service.job_get(job_id, db)
 
     if job is None:
@@ -72,7 +73,7 @@ async def get_job(job_id: str, db: AsyncSession = Depends(get_db)):
 
 @router.get("/jobs/{job_id}/result")
 async def get_job_result(job_id: str, db: AsyncSession = Depends(get_db)):
-    logger.info(f"[jobs.py] get_job_result: job_id [{job_id}]")
+    logger.info(f"\n/jobs/{job_id}/result [get_job_result]\n")
     job = await job_service.job_get(job_id, db)
 
     if job is None:
@@ -86,7 +87,7 @@ async def get_job_result(job_id: str, db: AsyncSession = Depends(get_db)):
 
 @router.post("/jobs/{job_id}/recover")
 async def recover_job(job_id: str, db: AsyncSession = Depends(get_db)):
-    logger.info(f"[jobs.py] recover_job: job_id [{job_id}]")
+    logger.info(f"\n/jobs/{job_id}/recover [recover_job]\n")
 
     job = await job_service.job_get(job_id, db)
 

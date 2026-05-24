@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: jobs-db
+  namespace: mapreduce
+  labels:
+    app: jobs-db
+spec:
+  clusterIP: None
+  selector:
+    app: jobs-db
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432

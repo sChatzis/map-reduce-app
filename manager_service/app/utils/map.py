@@ -1,6 +1,8 @@
 import sys
 import re
 
+from time import sleep
+
 if len(sys.argv) != 3:
     raise ValueError("Usage: python mapper.py <input_file> <output_file>")
 
