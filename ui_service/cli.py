@@ -3,13 +3,17 @@ import typer
 from typing_extensions import Annotated
 import os
 from pathlib import Path
+from jose import jwt
 
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8000/v1/users")
+MANAGER_URL = os.getenv("MANAGER_URL", "http://localhost:8001/v1")
 TOKEN_FILE = Path.home() / ".mapreduce_token"
 
 app = typer.Typer(help="MapReduce Authentication CLI")
 admin_app = typer.Typer(help="System administration commands")
+jobs_app = typer.Typer(help="Submit and inspect MapReduce jobs")
 app.add_typer(admin_app, name="admin")
+app.add_typer(jobs_app, name="jobs")
 
 
 def get_headers():
@@ -17,6 +21,26 @@ def get_headers():
         token = TOKEN_FILE.read_text().strip()
         return {"Authorization": f"Bearer {token}"}
     return {}
+
+
+def get_user_id_from_token() -> int:
+    """Decode the locally cached JWT (without signature verification) and
+    return the embedded ``user_id``. Exits the CLI if no token is present
+    or the payload is malformed."""
+    if not TOKEN_FILE.exists():
+        typer.echo("Not logged in. Run `cli.py login` first.")
+        raise typer.Exit(code=1)
+    token = TOKEN_FILE.read_text().strip()
+    try:
+        claims = jwt.get_unverified_claims(token)
+    except Exception as e:
+        typer.echo(f"Could not decode token: {e}")
+        raise typer.Exit(code=1)
+    user_id = claims.get("user_id")
+    if user_id is None:
+        typer.echo("Token payload missing user_id. Log in again.")
+        raise typer.Exit(code=1)
+    return int(user_id)
 
 
 # ==========================================
@@ -126,6 +150,108 @@ def admin_delete_user(
             typer.echo(f"API Error: {e.response.json().get('detail', e)}")
         except Exception as e:
             typer.echo(f"Error: {e}")
+
+
+# ==========================================
+# Jobs Commands
+# ==========================================
+@jobs_app.command("submit")
+def jobs_submit(
+        input_file: Annotated[str, typer.Option("--input", help="MinIO key of the input file")],
+        mapper: Annotated[str, typer.Option("--mapper", help="MinIO key of the mapper script")],
+        reducer: Annotated[str, typer.Option("--reducer", help="MinIO key of the reducer script")],
+        output: Annotated[str, typer.Option("--output", help="MinIO key for the final output (optional)")] = "",
+        mappers: Annotated[int, typer.Option("--mappers", help="Number of map tasks")] = 4,
+        reducers: Annotated[int, typer.Option("--reducers", help="Number of reduce tasks")] = 2,
+):
+    """Submit a new MapReduce job to the manager."""
+    user_id = get_user_id_from_token()
+    payload = {
+        "input_files": input_file,
+        "output_path": output,
+        "mapper_code": mapper,
+        "reducer_code": reducer,
+        "user_id": user_id,
+        "num_mappers": mappers,
+        "num_reducers": reducers,
+    }
+    try:
+        response = requests.post(f"{MANAGER_URL}/jobs", json=payload, headers=get_headers())
+        response.raise_for_status()
+        job = response.json()
+        typer.echo(f"Job created: {job['job_id']} (status: {job['status']})")
+    except requests.exceptions.HTTPError as e:
+        typer.echo(f"API Error: {e.response.json().get('detail', e)}")
+    except Exception as e:
+        typer.echo(f"Error: {e}")
+
+
+@jobs_app.command("status")
+def jobs_status(
+        job_id: Annotated[str, typer.Argument(help="UUID of the job to inspect")]
+):
+    """Show the current status of a single job."""
+    try:
+        response = requests.get(f"{MANAGER_URL}/jobs/{job_id}", headers=get_headers())
+        response.raise_for_status()
+        job = response.json()
+        typer.echo(
+            f"Job {job['job_id']}\n"
+            f"  status:    {job['status']}\n"
+            f"  mappers:   {job['num_mappers']}\n"
+            f"  reducers:  {job['num_reducers']}\n"
+            f"  input:     {job['input_files']}\n"
+            f"  output:    {job['output_path']}\n"
+            f"  created:   {job['created_at']}\n"
+            f"  updated:   {job['updated_at']}"
+        )
+    except requests.exceptions.HTTPError as e:
+        typer.echo(f"API Error: {e.response.json().get('detail', e)}")
+    except Exception as e:
+        typer.echo(f"Error: {e}")
+
+
+@jobs_app.command("list")
+def jobs_list():
+    """List all jobs known to the manager."""
+    try:
+        response = requests.get(f"{MANAGER_URL}/jobs", headers=get_headers())
+        response.raise_for_status()
+        jobs = response.json()
+        if not jobs:
+            typer.echo("No jobs found.")
+            return
+
+        typer.echo(f"{'Job ID':<38} | {'Status':<12} | {'Map':<4} | {'Red':<4} | Created")
+        typer.echo("-" * 90)
+        for j in jobs:
+            typer.echo(
+                f"{j['job_id']:<38} | "
+                f"{j['status']:<12} | "
+                f"{j['num_mappers']:<4} | "
+                f"{j['num_reducers']:<4} | "
+                f"{j['created_at']}"
+            )
+    except requests.exceptions.HTTPError as e:
+        typer.echo(f"API Error: {e.response.json().get('detail', e)}")
+    except Exception as e:
+        typer.echo(f"Error: {e}")
+
+
+@jobs_app.command("result")
+def jobs_result(
+        job_id: Annotated[str, typer.Argument(help="UUID of the completed job")]
+):
+    """Fetch the output path of a completed job."""
+    try:
+        response = requests.get(f"{MANAGER_URL}/jobs/{job_id}/result", headers=get_headers())
+        response.raise_for_status()
+        body = response.json()
+        typer.echo(f"Output: {body['output_path']}")
+    except requests.exceptions.HTTPError as e:
+        typer.echo(f"API Error: {e.response.json().get('detail', e)}")
+    except Exception as e:
+        typer.echo(f"Error: {e}")
 
 
 if __name__ == "__main__":
