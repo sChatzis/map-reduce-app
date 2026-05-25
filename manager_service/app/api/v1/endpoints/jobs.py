@@ -80,7 +80,7 @@ async def get_job_result(job_id: str, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail=f"Job not found with id = {job_id}")
 
     if job.status != JobStatus.COMPLETED:
-        raise HTTPException(status_code=409, detail=f"Job {job_id} is not completed yet (status: {job.status})")
+        raise HTTPException(status_code=409, detail=f"Job {job_id} is not completed yet (status: {job.status.value})")
 
     return {"output_path": job.output_path}
 

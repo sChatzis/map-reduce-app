@@ -111,7 +111,7 @@ services:
       - manager_service
     environment:
       BASE_URL: http://auth_service:8000/v1/users
-      MANAGER_URL: http://manager_service:8001
+      MANAGER_URL: http://manager_service:8001/v1
 
 volumes:
   user_postgres_data:
