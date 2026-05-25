@@ -13,6 +13,7 @@ COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/pytho
 
 COPY ./app /app/app
 COPY ./test_input.txt /app/test_input.txt
+COPY ./docs_input.txt /app/docs_input.txt
 
 EXPOSE 8001
 
