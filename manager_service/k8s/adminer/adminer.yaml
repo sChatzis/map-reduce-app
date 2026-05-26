@@ -22,13 +22,13 @@ spec:
             - containerPort: 8080
           env:
             - name: ADMINER_DEFAULT_SERVER
-              value: "jobs-db.mapreduce.svc.cluster.local"
+              value: "-db.mapreduce.svc.cluster.local"
           readinessProbe:
             httpGet:
               path: /
               port: 8080
-            initialDelaySeconds: 5
-            periodSeconds: 10
+            initialDelaySeconds: 2
+            periodSeconds: 2
 ---
 apiVersion: v1
 kind: Service
@@ -45,4 +45,4 @@ spec:
     - name: http
       port: 8080
       targetPort: 8080
-      nodePort: 30002
+      nodePort: 30003

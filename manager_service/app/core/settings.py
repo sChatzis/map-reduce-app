@@ -21,6 +21,7 @@ class Settings:
     MANAGER_NAMESPACE: str = os.environ["MANAGER_NAMESPACE"]
     MANAGER_WORKER_IMAGE_NAME: str = os.environ["MANAGER_WORKER_IMAGE_NAME"]
     MANAGER_REFRESH_PERIOD: int = int(os.environ["MANAGER_REFRESH_PERIOD"])
+    MANAGER_MAX_TASKS_PER_CYCLE: int = int(os.environ["MANAGER_MAX_TASKS_PER_CYCLE"])
 
     MINIO_ENDPOINT: str =  os.environ["MINIO_ENDPOINT"]
     MINIO_BUCKET: str =  os.environ["MINIO_BUCKET"]

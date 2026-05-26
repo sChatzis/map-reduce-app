@@ -37,14 +37,14 @@ async def lifespan(app: FastAPI):
 
     ensure_bucket(settings.MINIO_BUCKET)
 
-    upload_local_file(f"app/utils/map.py", "map.py")
-    upload_local_file(f"app/utils/reduce.py", "reduce.py")
-    upload_local_file(f"app/utils/map_test.py", "map_test.py")
-    upload_local_file(f"app/utils/reduce_test.py", "reduce_test.py")
-    upload_local_file(f"app/utils/invert_map.py", "invert_map.py")
-    upload_local_file(f"app/utils/invert_reduce.py", "invert_reduce.py")
-    upload_local_file(f"test_input.txt", "test_input.txt")
-    upload_local_file(f"docs_input.txt", "docs_input.txt")
+    upload_local_file("app/utils/map.py", "map.py")
+    upload_local_file("app/utils/reduce.py", "reduce.py")
+    upload_local_file("app/utils/map_test.py", "map_test.py")
+    upload_local_file("app/utils/reduce_test.py", "reduce_test.py")
+    upload_local_file("app/utils/invert_map.py", "invert_map.py")
+    upload_local_file("app/utils/invert_reduce.py", "invert_reduce.py")
+    upload_local_file("test_input.txt", "test_input.txt")
+    upload_local_file("docs_input.txt", "docs_input.txt")
 
     monitor_task = asyncio.create_task(monitor())
 

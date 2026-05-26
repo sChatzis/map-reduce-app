@@ -1,4 +1,4 @@
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from functools import partial as functools_partial
 
@@ -9,7 +9,7 @@ from app.models.enums import *
 from app.models.job import Job
 from app.models.task import Task
 from app.models.worker import Worker
-from app.services.job_service import job_get_batch
+from app.services.job_service import job_get_batch, job_update_status_batch
 from app.services.task_service import (
     task_get_all_idle,
     task_get_in_progress,
@@ -24,7 +24,9 @@ from app.services.task_service import (
 from app.services.worker_service import (
     worker_update_status_batch,
     worker_add_batch,
-    worker_get_batch, worker_delete_batch,
+    worker_get_batch,
+    worker_delete_batch,
+    worker_get_active_count,
 )
 from app.utils.utility import (
     merge_and_partition_map,
@@ -65,7 +67,7 @@ async def _monitor():
     while True:
         try:
             await schedule()
-            await monitor_running_workers()
+            #await monitor_running_workers()
         except Exception as ex:
             logger.warning(f"\n[_monitor] exception occurred {ex}\n")
 
@@ -89,6 +91,7 @@ async def _schedule(db: AsyncSession):
     )
 
     await update_finished_workers(db)
+    await cleanup_stale_workers(db)
     await recover_orphaned_tasks(db)
     await check_for_map_merge(db)
 
@@ -146,10 +149,17 @@ async def update_new_workers_and_tasks(
         db,
     )
 
-    logger.info(
-        f"\n[update_new_workers_and_tasks] workers ACTIVE {worker_result}/{len(workers)}, "
-        f"tasks IN_PROGRESS {task_result}/{len(tasks)}\n"
+    await job_update_status_batch(
+        list({t.job_id for t in tasks}),
+        JobStatus.RUNNING,
+        db,
     )
+
+    if worker_result > 0 and len(workers) > 0:
+        logger.info(
+            f"\n[update_new_workers_and_tasks] new workers ACTIVE {worker_result}/{len(workers)}, "
+            f"new tasks IN_PROGRESS {task_result}/{len(tasks)}\n"
+        )
 
 
 # =========================================================
@@ -160,7 +170,12 @@ async def update_new_workers_and_tasks(
 async def create_worker_names_for_idle_tasks(
     db: AsyncSession
 ) -> tuple[list[Task], list[str]]:
-    tasks = await task_get_all_idle(db)
+    workers_active_count = await worker_get_active_count(db)
+
+    if workers_active_count >= settings.MANAGER_MAX_TASKS_PER_CYCLE:
+        return [], []
+
+    tasks = await task_get_all_idle(db, limit=settings.MANAGER_MAX_TASKS_PER_CYCLE - workers_active_count)
 
     workers: list[str] = []
     new_tasks: list[Task] = []
@@ -269,6 +284,42 @@ async def _list_alive_worker_ids() -> set[str] | None:
         return None
 
 
+async def cleanup_stale_workers(db: AsyncSession):
+    alive_worker_ids = await _list_alive_worker_ids()
+
+    if alive_worker_ids is None:
+        return
+
+    result = await db.execute(select(Worker))
+    all_workers = result.scalars().all()
+
+    stale_ids = [
+        w.worker_id
+        for w in all_workers
+        if w.worker_id not in alive_worker_ids
+    ]
+
+    if not stale_ids:
+        return
+
+    # Clear FK on tasks first before deleting workers
+    await db.execute(
+        update(Task)
+        .where(Task.worker_pod_id.in_(stale_ids))
+        .where(Task.status == TaskStatus.IN_PROGRESS)
+        .values(worker_pod_id=None, status=TaskStatus.IDLE)
+        .execution_options(synchronize_session=False)
+    )
+    await db.flush()
+
+    await db.execute(
+        delete(Worker).where(Worker.worker_id.in_(stale_ids))
+    )
+    await db.commit()
+
+    logger.info(f"\n[cleanup_stale_workers] deleted {len(stale_ids)} stale workers\n")
+
+
 async def recover_orphaned_tasks(db: AsyncSession):
     """Reset tasks whose K8s Job has vanished (kubectl delete, TTL, node loss).
 
@@ -309,6 +360,8 @@ async def recover_orphaned_tasks(db: AsyncSession):
     # undo.
     await db.commit()
 
+    #log_str = ""
+
     for task_id, _ in candidates:
         try:
             async with db.begin():
@@ -316,11 +369,12 @@ async def recover_orphaned_tasks(db: AsyncSession):
                     await db.execute(
                         select(Task)
                         .where(Task.task_id == task_id)
+                        .where(Task.status == TaskStatus.IN_PROGRESS)
                         .with_for_update()
                     )
                 ).scalar_one_or_none()
 
-                if locked is None or locked.status != TaskStatus.IN_PROGRESS:
+                if locked is None:# or locked.status != TaskStatus.IN_PROGRESS:
                     continue
 
                 # Use the row's CURRENT worker_pod_id, not the snapshot
@@ -357,6 +411,8 @@ async def recover_orphaned_tasks(db: AsyncSession):
         except Exception as ex:
             logger.warning(f"\n[recover_orphaned_tasks] failed task {task_id} {ex}\n")
 
+    #if len(log_str) > 0:
+    #   logger.info(log_str)
 
 async def check_for_map_merge(db: AsyncSession):
     job_ids = await task_get_map_jobs(db)
@@ -409,6 +465,8 @@ async def check_for_map_merge(db: AsyncSession):
     # Commit (not rollback) because there's nothing to undo; the pre-loop
     # reads did no writes.
     await db.commit()
+
+    #log_str = ""
 
     for job_id in job_ids_to_process:
         try:
@@ -505,13 +563,14 @@ async def check_for_map_merge(db: AsyncSession):
                         data_location=data_location,
                     ))
 
-                logger.info(
-                    f"\n[check_for_map_merge] created reducers\n job {locked_job.job_id} "
-                    f"maps {len(map_paths)} reducers {len(reduce_output_paths)}\n"
-                )
+                #log_str += f"\n[check_for_map_merge] created reducers\n job {locked_job.job_id} "
+                #log_str += f"maps {len(map_paths)} reducers {len(reduce_output_paths)}\n"
 
         except Exception as ex:
             logger.warning(f"\n[check_for_map_merge] failed job {job_id} {ex}\n")
+
+        #if len(log_str) > 0:
+            #logger.info(log_str)
 
 
 def finalize_job(job: Job, tasks: list[Task], chunk_paths: list[str], map_paths: list[str]) -> None:
@@ -557,6 +616,8 @@ async def monitor_running_workers():
             namespace=settings.MANAGER_NAMESPACE,
         )
 
+        log_str = ""
+
         for job in jobs.items:
             pods = await asyncio.to_thread(
                 functools_partial(
@@ -567,10 +628,14 @@ async def monitor_running_workers():
             )
 
             for pod in pods.items:
-                logger.info(
-                    f"\n[monitor_running_workers]\njob {job.metadata.name}\n"
-                    f"pod {pod.metadata.name}\n{pod.status.phase}\n"
-                )
+                log_str += f"\n[monitor_running_workers]\njob {job.metadata.name}\n"
+                log_str += f"pod {pod.metadata.name}\n{pod.status.phase}\n"
+
+
+        if len(log_str) > 0:
+            logger.info(log_str)
+        else:
+            logger.info(f"\n[monitor_running_workers] no jobs\n")
 
     except Exception as ex:
         logger.warning(f"\n[monitor_running_workers] exception occurred {ex}\n")

@@ -1,7 +1,6 @@
 from collections import Counter, defaultdict
 
 
-from app.core.settings import settings
 from app.services.minio_service import (
     write_text_to_file,
     read_file_as_text,
@@ -148,7 +147,7 @@ def split_input_file_to_chunks(
 
         write_text_to_file(chunk_path, chunk_data)
 
-        logger.info(f"\n[split_input_file_to_chunks] uploaded single chunk {chunk_path}")
+        #logger.info(f"\n[split_input_file_to_chunks] uploaded single chunk {chunk_path}")
 
         return [chunk_path]
 
@@ -165,9 +164,9 @@ def split_input_file_to_chunks(
 
         chunk_paths.append(chunk_path)
 
-        logger.info(
-            f"\n[split_input_file_to_chunks] uploaded chunk {idx} of {len(chunk)} lines {chunk_path}"
-        )
+        #logger.info(
+        #    f"\n[split_input_file_to_chunks] uploaded chunk {idx} of {len(chunk)} lines {chunk_path}"
+        #)
 
     return chunk_paths
 
@@ -217,7 +216,7 @@ def merge_and_partition_map(
 
         write_text_to_file(part_path, part_data)
 
-        logger.info(f"\n[merge_and_partition_map] uploaded part 0 with {len(all_pairs)} pairs\n{job_id}/part/{job_id}_part{ext}\n")
+        #logger.info(f"\n[merge_and_partition_map] uploaded part 0 with {len(all_pairs)} pairs\n{job_id}/part/{job_id}_part{ext}\n")
 
         return [part_path]
 
@@ -231,7 +230,7 @@ def merge_and_partition_map(
 
         part_paths.append(part_path)
 
-        logger.info(f"\n[merge_and_partition_map] uploaded part {idx} with {len(part)} pairs\n{job_id}/part/{job_id}_part_{idx}{ext}\n")
+        #logger.info(f"\n[merge_and_partition_map] uploaded part {idx} with {len(part)} pairs\n{job_id}/part/{job_id}_part_{idx}{ext}\n")
 
     return part_paths
 
@@ -256,7 +255,7 @@ def final_reduce_merge(job_id: str, reducer_outputs: list[str], output_path: str
     final_data = ("\n".join(merged_lines) + "\n").encode("utf-8")
     write_text_to_file(output_path, final_data)
 
-    logger.info(f"\n[final_reduce_merge] created final output {output_path}\n")
+    #logger.info(f"\n[final_reduce_merge] created final output {output_path}\n")
 
 
 def cleanup_job_files(
@@ -280,12 +279,12 @@ def cleanup_job_files(
         files.extend(reduce_output_paths)
 
     if not files:
-        logger.info(f"\n[cleanup_job_files] nothing to delete\n")
+        #logger.info(f"\n[cleanup_job_files] nothing to delete\n")
         return
 
     try:
         delete_files(files)
-        logger.info(f"\n[cleanup_job_files] deleted {len(files)} files\n")
+        #logger.info(f"\n[cleanup_job_files] deleted {len(files)} files\n")
 
     except Exception as ex:
         logger.warning(f"\n[cleanup_job_files] cleanup failed {ex}\n")
@@ -325,9 +324,7 @@ def validate_map_outputs(chunk_paths: list[str], map_output_paths: list[str]):
     expected_counts = Counter(expected)
     actual_counts = Counter(actual)
 
-    if expected_counts == actual_counts:
-        logger.info(f"\n[validate_map_outputs] all mapper outputs valid {len(actual)} pairs across {len(map_output_paths)} chunks\n")
-    else:
+    if expected_counts != actual_counts:
         logger.info(f"\n[validate_map_outputs] mismatch expected {len(expected)} pairs but got {len(actual)}\n")
 
         missing = set(expected_counts) - set(actual_counts)
@@ -387,10 +384,7 @@ def validate_partition(map_paths: list[str], part_paths: list[str], num_reducers
         for error in routing_errors[:5]:
             logger.info(f"{error}")
 
-    if expected_counts == actual_counts and not routing_errors:
-        logger.info(f"\n[validate_partition] partition valid "
-                    f"{len(actual_pairs)} pairs across {len(part_paths)} partitions\n")
-    else:
+    if expected_counts != actual_counts or routing_errors:
         missing = set(expected_counts) - set(actual_counts)
         extra = set(actual_counts) - set(expected_counts)
 
@@ -434,13 +428,7 @@ def validate_reducers(part_paths: list[str], reducer_output_paths: list[str]):
             key, value = line.split("\t", 1)
             actual[key] = int(value)
 
-        if dict(expected) == actual:
-            logger.info(
-                f"\n[validate_reducers] reducer valid\n"
-                f"{output_path}\n"
-                f"{len(actual)} unique keys\n"
-            )
-        else:
+        if dict(expected) != actual:
             mismatched = {k for k in expected if k in actual and expected[k] != actual[k]}
             missing = set(expected) - set(actual)
             extra = set(actual) - set(expected)
@@ -478,10 +466,7 @@ def validate_map_reduce(input_path: str, output_path: str):
         word, count = line.strip().split("\t")
         result[word] = int(count)
 
-    if dict(expected) == result:
-        logger.info(f"\n[validate_map_reduce] valid {len(expected)} unique words match\n")
-
-    else:
+    if dict(expected) != result:
         missing = set(expected) - set(result)
         extra = set(result) - set(expected)
         mismatched = {w for w in expected if w in result and expected[w] != result[w]}

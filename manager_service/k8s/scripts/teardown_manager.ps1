@@ -20,6 +20,9 @@ Info "Deleting manager manifests..."
 kubectl delete -f "$K8S_DIR\..\manager-statefulset.yaml" --ignore-not-found
 if ($LASTEXITCODE -ne 0) { Fail "Failed to delete statefulset." }
 
+Info "Waiting for manager pod to terminate..."
+kubectl wait --for=delete pod/manager-service-0 --namespace=$NAMESPACE --timeout=60s 2>$null
+
 kubectl delete -f "$K8S_DIR\..\manager-service.yaml" --ignore-not-found
 if ($LASTEXITCODE -ne 0) { Fail "Failed to delete service." }
 
@@ -33,7 +36,7 @@ Info "Manager manifests deleted."
 # ==========================================
 
 Info "Deleting all worker jobs in namespace $NAMESPACE..."
-kubectl delete jobs -n $NAMESPACE --all --ignore-not-found
+kubectl delete jobs -n $NAMESPACE --all --ignore-not-found --grace-period=0 --force > $null
 if ($LASTEXITCODE -ne 0) { Fail "Failed to delete worker jobs." }
 Info "Worker jobs deleted."
 

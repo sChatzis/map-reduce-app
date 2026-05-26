@@ -4,7 +4,7 @@ from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import update, select, func
 
-
+from app.core.settings import settings
 from app.models.task import Task
 from app.models.enums import TaskType, TaskStatus
 from app.utils.utility import is_valid_uuid
@@ -86,13 +86,21 @@ async def task_get(task_id: str, db: AsyncSession) -> Optional[Task]:
     return result.scalar_one_or_none()
 
 
-async def task_get_all(db: AsyncSession) -> list[Task]:
+async def task_get_all(db: AsyncSession,) -> list[Task]:
     result = await db.execute(select(Task))
     return list(result.scalars().all())
 
 
-async def task_get_all_idle(db: AsyncSession) -> list[Task]:
-    result = await db.execute(select(Task).where(Task.status == TaskStatus.IDLE))
+async def task_get_all_idle(
+        db: AsyncSession,
+        limit: int = settings.MANAGER_MAX_TASKS_PER_CYCLE
+) -> list[Task]:
+    result = await db.execute(
+        select(Task)
+        .where(Task.status == TaskStatus.IDLE)
+        .where(Task.worker_pod_id.is_(None))
+        .limit(limit)
+    )
     return list(result.scalars().all())
 
 
@@ -359,3 +367,12 @@ async def task_are_maps_done_batch(
         job_id: remaining_map.get(job_id, 0) == 0
         for job_id in job_ids
     }
+
+
+async def task_get_in_progress_count(db: AsyncSession) -> int:
+    result = await db.execute(
+        select(func.count())
+        .select_from(Task)
+        .where(Task.status == TaskStatus.IN_PROGRESS)
+    )
+    return result.scalar_one()

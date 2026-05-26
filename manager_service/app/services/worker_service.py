@@ -2,7 +2,7 @@ from typing import Optional
 from datetime import datetime, UTC
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import update, select, delete
+from sqlalchemy import update, select, delete, func
 from sqlalchemy.orm import selectinload
 
 from app.models.worker import Worker
@@ -145,3 +145,12 @@ async def worker_delete_batch(worker_id: list[str], db: AsyncSession):
     await db.commit()
 
     return result.rowcount or 0
+
+
+async def worker_get_active_count(db: AsyncSession) -> int:
+    result = await db.execute(
+        select(func.count())
+        .select_from(Worker)
+        .where(Worker.status == WorkerStatus.ACTIVE)
+    )
+    return result.scalar_one()

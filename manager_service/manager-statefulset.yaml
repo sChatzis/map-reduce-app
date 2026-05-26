@@ -68,7 +68,9 @@ spec:
             - name: MINIO_ENDPOINT
               value: "minio.mapreduce.svc.cluster.local:9000"
             - name: MANAGER_REFRESH_PERIOD
-              value: "3"
+              value: "5"
+            - name: MANAGER_MAX_TASKS_PER_CYCLE
+              value: "30"
             - name: MANAGER_WORKER_IMAGE_NAME
               value: "map-reduce-app-manager_worker:latest"
 
@@ -77,11 +79,11 @@ spec:
               path: /health
               port: 8001
             initialDelaySeconds: 5
-            periodSeconds: 5
+            periodSeconds: 20
 
           livenessProbe:
             httpGet:
               path: /health
               port: 8001
             initialDelaySeconds: 5
-            periodSeconds: 5
+            periodSeconds: 20

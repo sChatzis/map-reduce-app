@@ -57,14 +57,14 @@ if (Get-Command minikube -ErrorAction SilentlyContinue) {
 
 Info "Applying manager manifests..."
 
-kubectl apply -f "$K8S_DIR\..\manager-service-account.yaml"
+kubectl apply -f "$K8S_DIR\..\manager-service-account.yaml" --namespace=$NAMESPACE
 if ($LASTEXITCODE -ne 0) { Fail "Failed to apply service account." }
 
-kubectl delete -f "$K8S_DIR\..\manager-service.yaml" --ignore-not-found
-kubectl apply -f "$K8S_DIR\..\manager-service.yaml"
+kubectl delete -f "$K8S_DIR\..\manager-service.yaml" --namespace=$NAMESPACE --ignore-not-found
+kubectl apply -f "$K8S_DIR\..\manager-service.yaml" --namespace=$NAMESPACE
 if ($LASTEXITCODE -ne 0) { Fail "Failed to apply service." }
 
-kubectl apply -f "$K8S_DIR\..\manager-statefulset.yaml"
+kubectl apply -f "$K8S_DIR\..\manager-statefulset.yaml" --namespace=$NAMESPACE
 if ($LASTEXITCODE -ne 0) { Fail "Failed to apply statefulset." }
 
 Info "Manifests applied."
@@ -96,10 +96,6 @@ kubectl wait --for=condition=Ready pod -l app=manager-service -n $NAMESPACE --ti
 Write-Host ""
 Info "Container logs:"
 kubectl logs -n $NAMESPACE -l app=manager-service --tail=100
-
-Write-Host ""
-Info "=== Access Points ==="
-Info "Manager API: http://localhost:30000"
 
 Write-Host ""
 Info "kubectl logs -n mapreduce manager-service-0 -f"
