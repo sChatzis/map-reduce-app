@@ -252,9 +252,9 @@ def delete_user(user_id: int, db: Session = Depends(get_db)):
 - [ ] **Step 4: Commit**
 
 ```bash
-git add authentication_service/app/models/enums.py \
-        authentication_service/app/core/security.py \
-        authentication_service/app/api/v1/endpoints/users.py
+git add auth_service/app/models/enums.py \
+        auth_service/app/core/security.py \
+        auth_service/app/api/v1/endpoints/users.py
 git commit -m "fix: align auth service enums to uppercase, fix admin check, fix route ordering"
 ```
 
@@ -1231,7 +1231,7 @@ services:
       retries: 10
 
   auth_service:
-    build: ./authentication_service
+    build: ./auth_service
     container_name: auth_service
     ports:
       - "8000:8000"
@@ -1369,7 +1369,7 @@ Expected: `/me` returns `{"id": 1, "username": "admin", "role": "ADMIN", "status
 # Submit a job (input_files, output_path, mapper_code, reducer_code must be valid absolute paths)
 curl -s -X POST http://localhost:8001/v1/jobs \
   -H "Content-Type: application/json" \
-  -d '{"input_files": "/jobs/input/data.txt", "output_path": "/jobs/output/", "mapper_code": "/jobs/scripts/mapper.py", "reducer_code": "/jobs/scripts/reducer.py", "user_id": 1}' | python3 -m json.tool
+  -d '{"input_files": "/jobs/input/data.txt", "output_path": "/jobs/output/", "mapper_code": "/jobs/scripts/mapper.py", "reducer_code": "/jobs/scripts/reduce.py", "user_id": 1}' | python3 -m json.tool
 
 # List jobs
 curl -s http://localhost:8001/v1/jobs | python3 -m json.tool

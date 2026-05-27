@@ -11,6 +11,8 @@ output_file = sys.argv[2]
 
 CLEAN = re.compile(r"[^a-z0-9]+")
 
+sleep(30)
+
 with open(input_file, "r") as f, open(output_file, "w") as out:
     for line in f:
         for word in line.strip().split():
@@ -22,4 +24,4 @@ with open(input_file, "r") as f, open(output_file, "w") as out:
             out.write(f"{cleaned}\t1\n")
 
 
-sleep(10)
+sleep(30)

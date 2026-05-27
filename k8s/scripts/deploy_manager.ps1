@@ -5,9 +5,10 @@
 $ErrorActionPreference = "Stop"
 
 $NAMESPACE = "mapreduce"
-$IMAGE_NAME = "map-reduce-app-manager_service:latest"
-$WORKER_IMAGE_NAME = "map-reduce-app-manager_worker:latest"
-$WORKER_DOCKERFILE = Join-Path $PSScriptRoot "..\..\..\manager_worker"
+$MANAGER_IMAGE_NAME = "map-reduce-app-manager-service:latest"
+$MANAGER_DOCKERFILE = Join-Path $PSScriptRoot "..\..\manager_service"
+$WORKER_IMAGE_NAME = "map-reduce-app-manager-worker:latest"
+$WORKER_DOCKERFILE = Join-Path $PSScriptRoot "..\..\manager_worker"
 $K8S_DIR = Join-Path $PSScriptRoot "..\"
 
 function Info($msg) { Write-Host "[INFO]  $msg" -ForegroundColor Green }
@@ -18,15 +19,22 @@ function Fail($msg) { Write-Host "[ERROR] $msg" -ForegroundColor Red; exit 1 }
 # 1. Build images
 # ==========================================
 
-Info "Building manager image: $IMAGE_NAME..."
-docker build -t $IMAGE_NAME ..\\..\\
+Info "Building manager image: $MANAGER_IMAGE_NAME..."
+docker build -t $MANAGER_IMAGE_NAME $MANAGER_DOCKERFILE
 if ($LASTEXITCODE -ne 0) { Fail "Manager image build failed." }
 Info "Manager image built."
 
-Info "Building worker image: $WORKER_IMAGE_NAME..."
-docker build -t $WORKER_IMAGE_NAME $WORKER_DOCKERFILE
-if ($LASTEXITCODE -ne 0) { Fail "Worker image build failed." }
-Info "Worker image built."
+$workerExists = docker images -q $WORKER_IMAGE_NAME
+if ($workerExists) {
+    Info "Worker image '$WORKER_IMAGE_NAME' already exists, skipping build."
+} else {
+    Info "Building worker image: $WORKER_IMAGE_NAME..."
+    docker build -t $WORKER_IMAGE_NAME $WORKER_DOCKERFILE
+    if ($LASTEXITCODE -ne 0) {
+        Fail "Worker image build failed."
+    }
+    Info "Worker image built."
+}
 
 # ==========================================
 # 2. Load images into cluster
@@ -34,7 +42,7 @@ Info "Worker image built."
 
 if (Get-Command minikube -ErrorAction SilentlyContinue) {
     Info "Loading images into minikube..."
-    minikube image load $IMAGE_NAME
+    minikube image load $MANAGER_IMAGE_NAME
     if ($LASTEXITCODE -ne 0) { Fail "Failed to load manager image into minikube." }
     minikube image load $WORKER_IMAGE_NAME
     if ($LASTEXITCODE -ne 0) { Fail "Failed to load worker image into minikube." }
@@ -42,7 +50,7 @@ if (Get-Command minikube -ErrorAction SilentlyContinue) {
     $cluster = kind get clusters 2>$null | Select-Object -First 1
     if ($cluster) {
         Info "Loading images into kind cluster: $cluster..."
-        kind load docker-image $IMAGE_NAME --name $cluster
+        kind load docker-image $MANAGER_IMAGE_NAME --name $cluster
         if ($LASTEXITCODE -ne 0) { Fail "Failed to load manager image into kind." }
         kind load docker-image $WORKER_IMAGE_NAME --name $cluster
         if ($LASTEXITCODE -ne 0) { Fail "Failed to load worker image into kind." }
@@ -57,14 +65,14 @@ if (Get-Command minikube -ErrorAction SilentlyContinue) {
 
 Info "Applying manager manifests..."
 
-kubectl apply -f "$K8S_DIR\..\manager-service-account.yaml" --namespace=$NAMESPACE
+kubectl apply -f "$K8S_DIR..\manager_service\manager-service-account.yaml" --namespace=$NAMESPACE
 if ($LASTEXITCODE -ne 0) { Fail "Failed to apply service account." }
 
-kubectl delete -f "$K8S_DIR\..\manager-service.yaml" --namespace=$NAMESPACE --ignore-not-found
-kubectl apply -f "$K8S_DIR\..\manager-service.yaml" --namespace=$NAMESPACE
+kubectl delete -f "$K8S_DIR..\manager_service\manager-service.yaml" --namespace=$NAMESPACE --ignore-not-found
+kubectl apply -f "$K8S_DIR..\manager_service\manager-service.yaml" --namespace=$NAMESPACE
 if ($LASTEXITCODE -ne 0) { Fail "Failed to apply service." }
 
-kubectl apply -f "$K8S_DIR\..\manager-statefulset.yaml" --namespace=$NAMESPACE
+kubectl apply -f "$K8S_DIR..\manager_service\manager-statefulset.yaml" --namespace=$NAMESPACE
 if ($LASTEXITCODE -ne 0) { Fail "Failed to apply statefulset." }
 
 Info "Manifests applied."
@@ -83,19 +91,8 @@ Info "Rollout complete."
 # ==========================================
 
 Write-Host ""
-Info "=== Health Checks ==="
-
-Write-Host ""
 Info "Pods:"
 kubectl get pods -n $NAMESPACE -o wide
-
-Write-Host ""
-Info "Pod readiness:"
-kubectl wait --for=condition=Ready pod -l app=manager-service -n $NAMESPACE --timeout=30s
-
-Write-Host ""
-Info "Container logs:"
-kubectl logs -n $NAMESPACE -l app=manager-service --tail=100
 
 Write-Host ""
 Info "kubectl logs -n mapreduce manager-service-0 -f"

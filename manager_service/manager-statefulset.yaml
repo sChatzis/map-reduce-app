@@ -48,7 +48,7 @@ spec:
 
       containers:
         - name: manager-service
-          image: map-reduce-app-manager_service:latest
+          image: map-reduce-app-manager-service:latest
           imagePullPolicy: Never
 
           ports:
@@ -72,7 +72,7 @@ spec:
             - name: MANAGER_MAX_TASKS_PER_CYCLE
               value: "30"
             - name: MANAGER_WORKER_IMAGE_NAME
-              value: "map-reduce-app-manager_worker:latest"
+              value: "map-reduce-app-manager-worker:latest"
 
           readinessProbe:
             httpGet:

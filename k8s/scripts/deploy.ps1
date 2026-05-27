@@ -5,19 +5,20 @@
 $ErrorActionPreference = "Stop"
 
 $NAMESPACE = "mapreduce"
-$ENV_FILE = "..\..\..\.env"
+$ENV_FILE = "..\..\.env"
 $SECRET_NAME = "manager-env"
-$IMAGE_NAME = "map-reduce-app-manager_service:latest"
-$WORKER_IMAGE_NAME = "map-reduce-app-manager_worker:latest"
-$WORKER_DOCKERFILE = Join-Path $PSScriptRoot "..\..\..\manager_worker"
+$MANAGER_IMAGE_NAME = "map-reduce-app-manager-service:latest"
+$MANAGER_DOCKERFILE = Join-Path $PSScriptRoot "..\..\manager_service"
+$WORKER_IMAGE_NAME = "map-reduce-app-manager-worker:latest"
+$WORKER_DOCKERFILE = Join-Path $PSScriptRoot "..\..\manager_worker"
 $K8S_DIR = Join-Path $PSScriptRoot "..\"
 $POSTGRES_IMAGE = "postgres:15"
-$MINIO_IMAGE = "minio/minio:latest"
+$MINIO_IMAGE = "minio/minio:RELEASE.2024-09-22T00-33-43Z"
 $ADMINER_IMAGE = "adminer:latest"
 $AUTH_IMAGE_NAME = "map-reduce-app-auth-service:latest"
-$AUTH_DOCKERFILE = Join-Path $PSScriptRoot "..\..\..\authentication_service"
+$AUTH_DOCKERFILE = Join-Path $PSScriptRoot "..\..\authentication_service"
 $CLI_IMAGE_NAME = "map-reduce-app-cli:latest"
-$CLI_DOCKERFILE = Join-Path $PSScriptRoot "..\..\..\ui_service"
+$CLI_DOCKERFILE = Join-Path $PSScriptRoot "..\..\ui_service"
 
 function Info($msg) { Write-Host "[INFO]  $msg" -ForegroundColor Green }
 function Warning($msg) { Write-Host "[WARN]  $msg" -ForegroundColor Yellow }
@@ -106,41 +107,56 @@ Info "Secret applied."
 # 4. Build manager image
 # ==========================================
 
-Info "Building manager image: $IMAGE_NAME..."
-docker build -t $IMAGE_NAME ..\\..\\
+Info "Building manager image: $MANAGER_IMAGE_NAME..."
+docker build -t $MANAGER_IMAGE_NAME $MANAGER_DOCKERFILE
 if ($LASTEXITCODE -ne 0) {
     Fail "Manager image build failed."
 }
 Info "Manager image built."
 
 # ==========================================
-# 5. Build worker image
+# 5. Build worker image (only if not already present)
 # ==========================================
 
-Info "Building worker image: $WORKER_IMAGE_NAME..."
-docker build -t $WORKER_IMAGE_NAME $WORKER_DOCKERFILE
-if ($LASTEXITCODE -ne 0) {
-    Fail "Worker image build failed."
+$workerExists = docker images -q $WORKER_IMAGE_NAME
+if ($workerExists) {
+    Info "Worker image '$WORKER_IMAGE_NAME' already exists, skipping build."
+} else {
+    Info "Building worker image: $WORKER_IMAGE_NAME..."
+    docker build -t $WORKER_IMAGE_NAME $WORKER_DOCKERFILE
+    if ($LASTEXITCODE -ne 0) {
+        Fail "Worker image build failed."
+    }
+    Info "Worker image built."
 }
-Info "Worker image built."
 
 # ==========================================
-# 6. Build auth image
+# 6. Build auth image (only if not already present)
 # ==========================================
 
-Info "Building auth image: $AUTH_IMAGE_NAME..."
-docker build -t $AUTH_IMAGE_NAME $AUTH_DOCKERFILE
-if ($LASTEXITCODE -ne 0) { Fail "Auth image build failed." }
-Info "Auth image built."
+$authExists = docker images -q $AUTH_IMAGE_NAME
+if ($authExists) {
+    Info "Auth image '$AUTH_IMAGE_NAME' already exists, skipping build."
+} else {
+    Info "Building auth image: $AUTH_IMAGE_NAME..."
+    docker build -t $AUTH_IMAGE_NAME $AUTH_DOCKERFILE
+    if ($LASTEXITCODE -ne 0) { Fail "Auth image build failed." }
+    Info "Auth image built."
+}
 
 # ==========================================
-# 7. Build CLI (UI) image
+# 7. Build CLI (UI) image (only if not already present)
 # ==========================================
 
-Info "Building CLI image: $CLI_IMAGE_NAME..."
-docker build -t $CLI_IMAGE_NAME $CLI_DOCKERFILE
-if ($LASTEXITCODE -ne 0) { Fail "CLI image build failed." }
-Info "CLI image built."
+$cliExists = docker images -q $CLI_IMAGE_NAME
+if ($cliExists) {
+    Info "CLI image '$CLI_IMAGE_NAME' already exists, skipping build."
+} else {
+    Info "Building CLI image: $CLI_IMAGE_NAME..."
+    docker build -t $CLI_IMAGE_NAME $CLI_DOCKERFILE
+    if ($LASTEXITCODE -ne 0) { Fail "CLI image build failed." }
+    Info "CLI image built."
+}
 
 # ==========================================
 # 8. Pull external images if needed
@@ -156,7 +172,7 @@ EnsureImage $ADMINER_IMAGE
 
 if (Get-Command minikube -ErrorAction SilentlyContinue) {
     Info "Loading images into minikube..."
-    minikube image load $IMAGE_NAME
+    minikube image load $MANAGER_IMAGE_NAME
     if ($LASTEXITCODE -ne 0) { Fail "Failed to load manager image into minikube." }
     minikube image load $WORKER_IMAGE_NAME
     if ($LASTEXITCODE -ne 0) { Fail "Failed to load worker image into minikube." }
@@ -174,7 +190,7 @@ if (Get-Command minikube -ErrorAction SilentlyContinue) {
     $cluster = kind get clusters 2>$null | Select-Object -First 1
     if ($cluster) {
         Info "Loading images into kind cluster: $cluster..."
-        kind load docker-image $IMAGE_NAME --name $cluster
+        kind load docker-image $MANAGER_IMAGE_NAME --name $cluster
         if ($LASTEXITCODE -ne 0) { Fail "Failed to load manager image into kind." }
         kind load docker-image $WORKER_IMAGE_NAME --name $cluster
         if ($LASTEXITCODE -ne 0) { Fail "Failed to load worker image into kind." }
@@ -274,11 +290,11 @@ Info "Adminer ready."
 
 Info "Applying auth-service manifests..."
 
-kubectl delete -f "$K8S_DIR\..\..\authentication_service\auth-service.yaml" --ignore-not-found
-kubectl apply -f "$K8S_DIR\..\..\authentication_service\auth-service.yaml"
+kubectl delete -f "$K8S_DIR..\authentication_service\auth-service.yaml" --ignore-not-found
+kubectl apply -f "$K8S_DIR..\authentication_service\auth-service.yaml"
 if ($LASTEXITCODE -ne 0) { Fail "Failed to apply auth service." }
 
-kubectl apply -f "$K8S_DIR\..\..\authentication_service\auth-statefulset.yaml"
+kubectl apply -f "$K8S_DIR..\authentication_service\auth-statefulset.yaml"
 if ($LASTEXITCODE -ne 0) { Fail "Failed to apply auth statefulset." }
 
 Info "Waiting for auth-service rollout..."
@@ -292,7 +308,7 @@ Info "Auth-service ready."
 
 Info "Applying UI-service manifests..."
 
-kubectl apply -f "$K8S_DIR\..\..\ui_service\ui-service.yaml" --namespace=$NAMESPACE
+kubectl apply -f "$K8S_DIR..\ui_service\ui-service.yaml" --namespace=$NAMESPACE
 if ($LASTEXITCODE -ne 0) { Fail "Failed to apply UI-service." }
 
 Info "Waiting for UI-service rollout..."
@@ -306,14 +322,14 @@ Info "UI-service ready."
 
 Info "Applying manager manifests..."
 
-kubectl apply -f "$K8S_DIR\..\manager-service-account.yaml"
+kubectl apply -f "$K8S_DIR..\manager_service\manager-service-account.yaml"
 if ($LASTEXITCODE -ne 0) { Fail "Failed to apply service account." }
 
-kubectl delete -f "$K8S_DIR\..\manager-service.yaml" --ignore-not-found
-kubectl apply -f "$K8S_DIR\..\manager-service.yaml"
+kubectl delete -f "$K8S_DIR..\manager_service\manager-service.yaml" --ignore-not-found
+kubectl apply -f "$K8S_DIR..\manager_service\manager-service.yaml"
 if ($LASTEXITCODE -ne 0) { Fail "Failed to apply service." }
 
-kubectl apply -f "$K8S_DIR\..\manager-statefulset.yaml"
+kubectl apply -f "$K8S_DIR..\manager_service\manager-statefulset.yaml"
 if ($LASTEXITCODE -ne 0) { Fail "Failed to apply statefulset." }
 
 Info "Manifests applied."
@@ -336,7 +352,6 @@ Info "Pods:"
 kubectl get pods -n $NAMESPACE -o wide
 
 Write-Host ""
-Info "=== Access Points ==="
 Info "UI:             http://localhost:30000"
 Info "Manager API:    http://localhost:30001"
 Info "MinIO Console:  http://localhost:30002"

@@ -17,16 +17,16 @@ function Fail($msg) { Write-Host "[ERROR] $msg" -ForegroundColor Red; exit 1 }
 
 Info "Deleting manager manifests..."
 
-kubectl delete -f "$K8S_DIR\..\manager-statefulset.yaml" --ignore-not-found
+kubectl delete -f "$K8S_DIR..\manager_service\manager-statefulset.yaml" --ignore-not-found
 if ($LASTEXITCODE -ne 0) { Fail "Failed to delete statefulset." }
 
 Info "Waiting for manager pod to terminate..."
 kubectl wait --for=delete pod/manager-service-0 --namespace=$NAMESPACE --timeout=60s 2>$null
 
-kubectl delete -f "$K8S_DIR\..\manager-service.yaml" --ignore-not-found
+kubectl delete -f "$K8S_DIR..\manager_service\manager-service.yaml" --ignore-not-found
 if ($LASTEXITCODE -ne 0) { Fail "Failed to delete service." }
 
-kubectl delete -f "$K8S_DIR\..\manager-service-account.yaml" --ignore-not-found
+kubectl delete -f "$K8S_DIR..\manager_service\manager-service-account.yaml" --ignore-not-found
 if ($LASTEXITCODE -ne 0) { Fail "Failed to delete service account." }
 
 Info "Manager manifests deleted."

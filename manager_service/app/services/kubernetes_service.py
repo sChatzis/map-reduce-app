@@ -1,4 +1,4 @@
-from sqlalchemy import select, delete, update
+from sqlalchemy import select, delete, update, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from functools import partial as functools_partial
 
@@ -67,7 +67,7 @@ async def _monitor():
     while True:
         try:
             await schedule()
-            #await monitor_running_workers()
+            await monitor_running_workers()
         except Exception as ex:
             logger.warning(f"\n[_monitor] exception occurred {ex}\n")
 
@@ -91,7 +91,6 @@ async def _schedule(db: AsyncSession):
     )
 
     await update_finished_workers(db)
-    await cleanup_stale_workers(db)
     await recover_orphaned_tasks(db)
     await check_for_map_merge(db)
 
@@ -193,43 +192,99 @@ async def create_worker_names_for_idle_tasks(
 
 
 async def update_finished_workers(db: AsyncSession):
-    successful_workers, failed_workers = await get_finished_workers()
+    successful_workers, failed_workers, forceful_workers = await get_finished_workers()
 
     successful_tasks = await task_get_by_worker_batch(successful_workers, db)
     failed_tasks = await task_get_by_worker_batch(failed_workers, db)
+    forceful_tasks = await task_get_by_worker_batch(forceful_workers, db)
 
+    # Successful — no race condition risk, mark completed
     await task_clear_worker_batch([t.task_id for t in successful_tasks], db)
-
     await worker_delete_batch(successful_workers, db)
-
     await task_update_status_batch(
         [t.task_id for t in successful_tasks],
         TaskStatus.COMPLETED,
         db
     )
 
-    await worker_update_status_batch(
-        failed_workers,
-        WorkerStatus.FAILED,
-        db
-    )
+    # End read tx so per-task begin() blocks can open their own
+    await db.commit()
 
-    await task_update_status_batch(
-        [t.task_id for t in failed_tasks],
-        TaskStatus.FAILED,
-        db
-    )
+    # Failed (graceful script error — mark task and job as failed)
+    for task in failed_tasks:
+        try:
+            async with db.begin():
+                locked = (
+                    await db.execute(
+                        select(Task)
+                        .where(Task.task_id == task.task_id)
+                        .where(Task.status == TaskStatus.IN_PROGRESS)
+                        .with_for_update()
+                    )
+                ).scalar_one_or_none()
 
-    for worker in successful_workers:
+                if locked is None:
+                    continue
+
+                stale_worker_id = locked.worker_pod_id
+
+                locked.worker_pod_id = None
+                locked.status = TaskStatus.FAILED
+                await db.flush()
+
+                await db.execute(
+                    delete(Worker).where(Worker.worker_id == stale_worker_id)
+                )
+
+                await job_update_status_batch([locked.job_id], JobStatus.FAILED, db)
+
+                logger.info(f"\n[update_finished_workers] failed task {task.task_id} worker {stale_worker_id}\n")
+
+        except Exception as ex:
+            logger.warning(f"\n[update_finished_workers] failed graceful reset task {task.task_id} {ex}\n")
+
+    # Forceful (OOMKill, SIGKILL — reset to IDLE so scheduler respawns)
+    for task in forceful_tasks:
+        try:
+            async with db.begin():
+                locked = (
+                    await db.execute(
+                        select(Task)
+                        .where(Task.task_id == task.task_id)
+                        .where(Task.status == TaskStatus.IN_PROGRESS)
+                        .with_for_update()
+                    )
+                ).scalar_one_or_none()
+
+                if locked is None:
+                    continue
+
+                stale_worker_id = locked.worker_pod_id
+
+                locked.worker_pod_id = None
+                locked.status = TaskStatus.IDLE
+                await db.flush()
+
+                await db.execute(
+                    delete(Worker).where(Worker.worker_id == stale_worker_id)
+                )
+
+                logger.info(f"\n[update_finished_workers] forceful reset task {task.task_id} worker {stale_worker_id}\n")
+
+        except Exception as ex:
+            logger.warning(f"\n[update_finished_workers] failed forceful reset task {task.task_id} {ex}\n")
+
+    for worker in successful_workers + failed_workers + forceful_workers:
         try:
             await kubernetes_client.delete_worker_job(worker)
         except Exception as ex:
             logger.warning(f"\n[update_finished_workers] exception occurred {ex}\n")
 
 
-async def get_finished_workers() -> tuple[list[str], list[str]]:
+async def get_finished_workers() -> tuple[list[str], list[str], list[str]]:
     try:
         batch_v1 = kubernetes_client.get_batch_client()
+        core_v1 = kubernetes_client.get_core_client()
 
         jobs = await asyncio.to_thread(
             batch_v1.list_namespaced_job,
@@ -238,21 +293,48 @@ async def get_finished_workers() -> tuple[list[str], list[str]]:
 
         successful: list[str] = []
         failed: list[str] = []
+        forceful: list[str] = []
 
         for job in jobs.items:
             name = job.metadata.name
+            worker_id = name.replace("worker-", "", 1)
 
             if getattr(job.status, "succeeded", 0):
-                successful.append(name.replace("worker-", "", 1))
+                successful.append(worker_id)
 
             elif getattr(job.status, "failed", 0):
-                failed.append(name.replace("worker-", "", 1))
+                pods = await asyncio.to_thread(
+                    core_v1.list_namespaced_pod,
+                    namespace=settings.MANAGER_NAMESPACE,
+                    label_selector=f"job-name={name}",
+                )
 
-        return successful, failed
+                is_forceful = True  # default to forceful if we can't determine
+
+                for pod in pods.items:
+                    for container in (pod.status.container_statuses or []):
+                        terminated = getattr(container.state, "terminated", None)
+                        if terminated:
+                            exit_code = getattr(terminated, "exit_code", 0)
+                            reason = getattr(terminated, "reason", "")
+                            is_forceful = exit_code >= 128 or reason == "OOMKilled"
+                            logger.info(
+                                f"\n[get_finished_workers] worker {worker_id} "
+                                f"exit_code={exit_code} reason={reason} "
+                                f"forceful={is_forceful}\n"
+                            )
+
+                if is_forceful:
+                    forceful.append(worker_id)
+                else:
+                    failed.append(worker_id)
+
+        logger.info(f"\n[get_finished_workers] successful={successful} failed={failed} forceful={forceful}\n")
+        return successful, failed, forceful
 
     except Exception as ex:
         logger.warning(f"\n[get_finished_workers] exception occurred {ex}\n")
-        return [], []
+        return [], [], []
 
 
 # =========================================================
@@ -302,15 +384,15 @@ async def cleanup_stale_workers(db: AsyncSession):
     if not stale_ids:
         return
 
-    # Clear FK on tasks first before deleting workers
     await db.execute(
         update(Task)
         .where(Task.worker_pod_id.in_(stale_ids))
         .where(Task.status == TaskStatus.IN_PROGRESS)
-        .values(worker_pod_id=None, status=TaskStatus.IDLE)
+        .values(worker_pod_id=None)
         .execution_options(synchronize_session=False)
     )
     await db.flush()
+    await db.commit()
 
     await db.execute(
         delete(Worker).where(Worker.worker_id.in_(stale_ids))
@@ -360,8 +442,6 @@ async def recover_orphaned_tasks(db: AsyncSession):
     # undo.
     await db.commit()
 
-    #log_str = ""
-
     for task_id, _ in candidates:
         try:
             async with db.begin():
@@ -369,12 +449,16 @@ async def recover_orphaned_tasks(db: AsyncSession):
                     await db.execute(
                         select(Task)
                         .where(Task.task_id == task_id)
-                        .where(Task.status == TaskStatus.IN_PROGRESS)
+                        .where(or_(
+                            Task.status == TaskStatus.IN_PROGRESS,
+                            Task.status == TaskStatus.FAILED
+                        )
+                        )
                         .with_for_update()
                     )
                 ).scalar_one_or_none()
 
-                if locked is None:# or locked.status != TaskStatus.IN_PROGRESS:
+                if locked is None:
                     continue
 
                 # Use the row's CURRENT worker_pod_id, not the snapshot
@@ -411,8 +495,6 @@ async def recover_orphaned_tasks(db: AsyncSession):
         except Exception as ex:
             logger.warning(f"\n[recover_orphaned_tasks] failed task {task_id} {ex}\n")
 
-    #if len(log_str) > 0:
-    #   logger.info(log_str)
 
 async def check_for_map_merge(db: AsyncSession):
     job_ids = await task_get_map_jobs(db)
@@ -466,8 +548,6 @@ async def check_for_map_merge(db: AsyncSession):
     # reads did no writes.
     await db.commit()
 
-    #log_str = ""
-
     for job_id in job_ids_to_process:
         try:
             # SELECT FOR UPDATE on the Job row serializes the
@@ -492,7 +572,7 @@ async def check_for_map_merge(db: AsyncSession):
                     )
                 ).scalar_one_or_none()
 
-                if locked_job is None or locked_job.status == JobStatus.COMPLETED:
+                if locked_job is None or locked_job.status == JobStatus.COMPLETED or locked_job.status == JobStatus.FAILED:
                     continue
 
                 map_paths = job_to_paths.get(locked_job.job_id, [])
@@ -562,15 +642,8 @@ async def check_for_map_merge(db: AsyncSession):
                         input_split=input_split,
                         data_location=data_location,
                     ))
-
-                #log_str += f"\n[check_for_map_merge] created reducers\n job {locked_job.job_id} "
-                #log_str += f"maps {len(map_paths)} reducers {len(reduce_output_paths)}\n"
-
         except Exception as ex:
             logger.warning(f"\n[check_for_map_merge] failed job {job_id} {ex}\n")
-
-        #if len(log_str) > 0:
-            #logger.info(log_str)
 
 
 def finalize_job(job: Job, tasks: list[Task], chunk_paths: list[str], map_paths: list[str]) -> None:
@@ -630,7 +703,6 @@ async def monitor_running_workers():
             for pod in pods.items:
                 log_str += f"\n[monitor_running_workers]\njob {job.metadata.name}\n"
                 log_str += f"pod {pod.metadata.name}\n{pod.status.phase}\n"
-
 
         if len(log_str) > 0:
             logger.info(log_str)
