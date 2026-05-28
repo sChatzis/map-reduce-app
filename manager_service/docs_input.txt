@@ -1,0 +1,20 @@
+DOC_HAMLET	To be or not to be that is the question
+DOC_ROMEO	But soft what light through yonder window breaks it is the east and Juliet is the sun
+DOC_MACBETH	Tomorrow and tomorrow and tomorrow creeps in this petty pace from day to day
+DOC_JULIUS	Friends Romans countrymen lend me your ears
+DOC_LEAR	Nothing will come of nothing speak again
+DOC_OTHELLO	I am not what I am
+DOC_TEMPEST	We are such stuff as dreams are made on and our little life is rounded with a sleep
+DOC_HENRYV	Once more unto the breach dear friends once more
+DOC_TWELFTH	Some are born great some achieve greatness and some have greatness thrust upon them
+DOC_RICHARD3	Now is the winter of our discontent made glorious summer by this sun of York
+DOC_ASYOULIKEIT	All the world is a stage and all the men and women merely players
+DOC_MUCHADO	Sigh no more ladies sigh no more men were deceivers ever
+DOC_MIDSUMMER	The course of true love never did run smooth
+DOC_MERCHANT	All that glitters is not gold often have you heard that told
+DOC_TAMING	There is small choice in rotten apples
+DOC_ANTHONY	Age cannot wither her nor custom stale her infinite variety
+DOC_CORIOLANUS	What is the city but the people
+DOC_CYMBELINE	Fear no more the heat of the sun nor the furious winters rages
+DOC_TIMON	Nothing emboldens sin so much as mercy
+DOC_TITUS	These words are razors to my wounded heart

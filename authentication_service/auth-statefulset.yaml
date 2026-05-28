@@ -1,0 +1,85 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: auth-service
+  namespace: mapreduce
+  labels:
+    app: auth-service
+spec:
+  serviceName: auth-service
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: auth-service
+
+  template:
+    metadata:
+      labels:
+        app: auth-service
+
+    spec:
+      initContainers:
+        - name: wait-for-postgres
+          image: busybox
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z user-db.mapreduce.svc.cluster.local 5432; do
+                echo "Waiting for Postgres..."
+                sleep 2
+              done
+              echo "Postgres is ready."
+
+      containers:
+        - name: auth-service
+          image: map-reduce-app-auth-service:latest
+          imagePullPolicy: Never
+
+          ports:
+            - containerPort: 8000
+
+          envFrom:
+            - secretRef:
+                name: manager-env
+
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: manager-env
+                  key: USER_DB_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: manager-env
+                  key: USER_DB_PASSWORD
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: manager-env
+                  key: USER_DB_NAME
+            - name: POSTGRES_SERVER
+              value: "user-db.mapreduce.svc.cluster.local"
+            - name: POSTGRES_PORT
+              value: "5432"
+            - name: JWT_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: manager-env
+                  key: JWT_SECRET_KEY
+
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 5

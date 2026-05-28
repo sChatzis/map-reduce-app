@@ -1,0 +1,89 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: manager-service
+  namespace: mapreduce
+  labels:
+    app: manager-service
+spec:
+  serviceName: manager-service
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: manager-service
+
+  template:
+    metadata:
+      labels:
+        app: manager-service
+
+    spec:
+      serviceAccountName: manager-sa
+
+      initContainers:
+        - name: wait-for-postgres
+          image: busybox
+          command:
+          - sh
+          - -c
+          - |
+            until nc -z jobs-db.mapreduce.svc.cluster.local 5432; do
+             echo "Waiting for Postgres..."
+              sleep 2
+            done
+            echo "Postgres is ready."
+
+        - name: wait-for-minio
+          image: busybox
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z minio.mapreduce.svc.cluster.local 9000; do
+              echo "Waiting for MinIO..."
+              sleep 2
+              done
+              echo "MinIO is ready."
+
+      containers:
+        - name: manager-service
+          image: map-reduce-app-manager-service:latest
+          imagePullPolicy: Never
+
+          ports:
+            - containerPort: 8001
+
+          envFrom:
+            - secretRef:
+                name: manager-env
+
+          env:
+            - name: MANAGER_NAMESPACE
+              value: "mapreduce"
+            - name: POSTGRES_SERVER
+              value: "jobs-db.mapreduce.svc.cluster.local"
+            - name: POSTGRES_PORT
+              value: "5432"
+            - name: MINIO_ENDPOINT
+              value: "minio.mapreduce.svc.cluster.local:9000"
+            - name: MANAGER_REFRESH_PERIOD
+              value: "5"
+            - name: MANAGER_MAX_TASKS_PER_CYCLE
+              value: "30"
+            - name: MANAGER_WORKER_IMAGE_NAME
+              value: "map-reduce-app-manager-worker:latest"
+
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 5
+            periodSeconds: 20
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 5
+            periodSeconds: 20

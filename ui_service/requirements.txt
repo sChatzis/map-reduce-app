@@ -1,3 +1,4 @@
 typer[all]
 typing_extensions
 requests
+python-jose[cryptography]
